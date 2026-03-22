@@ -10,16 +10,124 @@
         padding: 0;
         box-sizing: border-box;
       }
+
+      :root {
+        color-scheme: dark;
+      }
+
       body {
-        background: #1a1a2e;
+        background: radial-gradient(circle at 25% 20%, #1f2950 0%, #0f1428 55%, #090d1a 100%);
         display: flex;
         justify-content: center;
         align-items: center;
         min-height: 100vh;
+        font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+        overflow: hidden;
+      }
+
+      #name-overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(7, 10, 20, 0.78);
+        backdrop-filter: blur(8px);
+        z-index: 999;
+      }
+
+      #name-overlay.hidden {
+        display: none;
+      }
+
+      .name-card {
+        width: min(92vw, 430px);
+        background: linear-gradient(180deg, rgba(33, 42, 86, 0.96) 0%, rgba(17, 24, 39, 0.97) 100%);
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        border-radius: 16px;
+        padding: 22px;
+        box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
+      }
+
+      .name-card h1 {
+        font-size: 22px;
+        color: #e2e8f0;
+        margin-bottom: 6px;
+        letter-spacing: 0.02em;
+      }
+
+      .name-card p {
+        color: #94a3b8;
+        font-size: 14px;
+        margin-bottom: 14px;
+        line-height: 1.4;
+      }
+
+      #name-input {
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: rgba(2, 6, 23, 0.62);
+        color: #f8fafc;
+        font-size: 16px;
+        outline: none;
+        transition: border-color 0.2s ease;
+      }
+
+      #name-input:focus {
+        border-color: rgba(34, 211, 238, 0.95);
+      }
+
+      .name-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      #start-button {
+        width: 100%;
+        border: none;
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: linear-gradient(90deg, #22d3ee 0%, #3b82f6 100%);
+        color: #0f172a;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      #start-button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      #name-error {
+        min-height: 18px;
+        margin-top: 8px;
+        font-size: 13px;
+        color: #fda4af;
       }
     </style>
   </head>
   <body>
+    <div id="name-overlay">
+      <div class="name-card">
+        <h1>Magnet Arena</h1>
+        <p>Gib deinen Namen ein, dann geht’s in die Arena. Ohne Name kein Match-Start.</p>
+        <input
+          id="name-input"
+          type="text"
+          maxlength="16"
+          placeholder="Dein Spielername"
+          autocomplete="nickname"
+        />
+        <div class="name-actions">
+          <button id="start-button" type="button">In die Arena starten</button>
+        </div>
+        <div id="name-error"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
