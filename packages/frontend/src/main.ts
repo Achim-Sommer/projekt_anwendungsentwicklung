@@ -79,6 +79,7 @@ class GameScene extends Phaser.Scene {
   private controlsTitle!: Phaser.GameObjects.Text;
   private controlsText!: Phaser.GameObjects.Text;
   private arenaGraphics!: Phaser.GameObjects.Graphics;
+  private hazardGraphics!: Phaser.GameObjects.Graphics;
   private decorGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
   private aimLine!: Phaser.GameObjects.Graphics;
@@ -122,12 +123,14 @@ class GameScene extends Phaser.Scene {
       this.resizeToArena();
       this.updateStatus();
       this.drawArena();
+      this.drawHazards(this.time.now / 1000);
       this.drawPlayers();
       this.updateHud();
     };
     this.onSnapshot = (payload) => {
       this.snapshot = payload;
       this.resizeToArena();
+      this.drawHazards(this.time.now / 1000);
       this.drawPlayers();
       this.updateHud();
     };
@@ -142,6 +145,7 @@ class GameScene extends Phaser.Scene {
 
     this.hudPanel = this.add.graphics().setDepth(19).setScrollFactor(0);
     this.arenaGraphics = this.add.graphics();
+    this.hazardGraphics = this.add.graphics();
     this.decorGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
     this.aimLine = this.add.graphics();
@@ -238,6 +242,11 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    // Animierte Gefahren laufen dauerhaft mit, auch wenn sich Snapshot-Daten nicht aendern.
+    if (this.snapshot) {
+      this.drawHazards(this.time.now / 1000);
+    }
+
     const player = this.getLocalPlayer();
     if (!player) {
       return;
@@ -311,18 +320,32 @@ class GameScene extends Phaser.Scene {
     }
     this.hazardLabels = [];
 
+    // Statische Ebene: Hintergrund und Bodenmuster. Diese Ebene wird nur bei Arena-Updates neu gezeichnet.
     this.decorGraphics.clear();
     this.arenaGraphics.clear();
+    this.hazardGraphics.clear();
     this.arenaGraphics.fillStyle(0x050814, 1);
     this.arenaGraphics.fillRect(0, 0, this.snapshot.arena.width, this.snapshot.arena.height);
     this.arenaGraphics.fillStyle(0x0b1223, 0.9);
     this.arenaGraphics.fillRoundedRect(10, 10, this.snapshot.arena.width - 20, this.snapshot.arena.height - 20, 24);
 
-    this.decorGraphics.lineStyle(1, 0x1e293b, 0.55);
-    for (let x = 70; x < this.snapshot.arena.width; x += 80) {
+    // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
+    const tileSize = 56;
+    for (let y = 24; y < this.snapshot.arena.height - 24; y += tileSize) {
+      for (let x = 24; x < this.snapshot.arena.width - 24; x += tileSize) {
+        const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
+        this.decorGraphics.fillStyle(isAlt ? 0x111f38 : 0x0f1a2f, isAlt ? 0.44 : 0.28);
+        this.decorGraphics.fillRoundedRect(x, y, tileSize - 8, tileSize - 8, 8);
+        this.decorGraphics.lineStyle(1, 0x3b82f6, isAlt ? 0.16 : 0.1);
+        this.decorGraphics.strokeRoundedRect(x, y, tileSize - 8, tileSize - 8, 8);
+      }
+    }
+
+    this.decorGraphics.lineStyle(1, 0x1e293b, 0.35);
+    for (let x = 24; x < this.snapshot.arena.width - 20; x += tileSize) {
       this.decorGraphics.lineBetween(x, 20, x, this.snapshot.arena.height - 20);
     }
-    for (let y = 70; y < this.snapshot.arena.height; y += 80) {
+    for (let y = 24; y < this.snapshot.arena.height - 20; y += tileSize) {
       this.decorGraphics.lineBetween(20, y, this.snapshot.arena.width - 20, y);
     }
 
@@ -348,43 +371,156 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics.strokeRect(0, 0, this.snapshot.arena.width, this.snapshot.arena.height);
 
     for (const hazard of this.snapshot.arena.hazards) {
-      this.drawHazard(hazard);
+      this.createHazardLabel(hazard);
     }
   }
 
-  private drawHazard(hazard: HazardZone): void {
-    let color = 0x4b5563;
-    let edgeColor = 0x94a3b8;
-    let title = "ZONE";
+  private drawHazards(timeSeconds: number): void {
+    if (!this.snapshot) {
+      return;
+    }
+
+    // Dynamische Ebene: Hazards werden pro Frame neu gezeichnet, damit Animationen fluessig wirken.
+    this.hazardGraphics.clear();
+    for (const hazard of this.snapshot.arena.hazards) {
+      this.drawHazard(hazard, timeSeconds);
+    }
+  }
+
+  private drawHazard(hazard: HazardZone, timeSeconds: number): void {
+    // localTime verschiebt Animationen pro Zone leicht, damit nicht alles synchron "blinkt".
+    const localTime = timeSeconds + hazard.x * 0.003 + hazard.y * 0.002;
+
     if (hazard.type === "lava") {
-      color = 0xef4444;
-      edgeColor = 0xfb7185;
+      const pulse = 0.62 + Math.sin(localTime * 2.4) * 0.16;
+      this.hazardGraphics.fillStyle(0x7f1d1d, 0.78);
+      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+      this.hazardGraphics.fillStyle(0xdc2626, 0.48 + pulse * 0.22);
+      this.hazardGraphics.fillRoundedRect(
+        hazard.x + 4,
+        hazard.y + 5,
+        hazard.width - 8,
+        hazard.height - 10,
+        8
+      );
+      this.hazardGraphics.fillStyle(0xfb923c, 0.2 + pulse * 0.18);
+      this.hazardGraphics.fillRoundedRect(
+        hazard.x + 10,
+        hazard.y + 12,
+        hazard.width - 20,
+        hazard.height - 24,
+        6
+      );
+      this.hazardGraphics.lineStyle(3, 0xfda4af, 0.56 + pulse * 0.25);
+      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+
+      this.hazardGraphics.lineStyle(2, 0xfdba74, 0.34 + pulse * 0.14);
+      for (let y = hazard.y + 8; y < hazard.y + hazard.height - 6; y += 12) {
+        const sway = Math.sin(localTime * 3 + y * 0.08) * 3;
+        this.hazardGraphics.beginPath();
+        this.hazardGraphics.moveTo(hazard.x + 8, y);
+        this.hazardGraphics.lineTo(hazard.x + hazard.width * 0.34, y - 3 + sway);
+        this.hazardGraphics.lineTo(hazard.x + hazard.width * 0.62, y + 3 - sway);
+        this.hazardGraphics.lineTo(hazard.x + hazard.width - 8, y);
+        this.hazardGraphics.strokePath();
+      }
+
+      for (let i = 0; i < 8; i += 1) {
+        const phase = localTime * (1.6 + i * 0.1) + i * 0.7;
+        const bubbleX = hazard.x + 14 + ((i + 1) / 9) * (hazard.width - 28);
+        const bubbleY = hazard.y + 16 + ((Math.sin(phase) + 1) * 0.5) * (hazard.height - 32);
+        const bubbleR = 1.8 + ((Math.cos(phase * 1.3) + 1) * 0.5) * 2.2;
+        this.hazardGraphics.fillStyle(0xfef08a, 0.25 + ((Math.sin(phase * 2) + 1) * 0.5) * 0.3);
+        this.hazardGraphics.fillCircle(bubbleX, bubbleY, bubbleR);
+      }
+      return;
+    }
+
+    if (hazard.type === "electric") {
+      const pulse = 0.5 + (Math.sin(localTime * 4.3) + 1) * 0.25;
+      // Elektro bewusst in Gelb/Orange (Wunsch), ohne diagonale Linien fuer ein ruhigeres Bild.
+      this.hazardGraphics.fillStyle(0x3f2a06, 0.82);
+      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+      this.hazardGraphics.fillStyle(0x92400e, 0.45 + pulse * 0.24);
+      this.hazardGraphics.fillRoundedRect(
+        hazard.x + 3,
+        hazard.y + 3,
+        hazard.width - 6,
+        hazard.height - 6,
+        9
+      );
+      this.hazardGraphics.lineStyle(3, 0xfacc15, 0.56 + pulse * 0.32);
+      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+
+      for (let x = hazard.x + 12; x < hazard.x + hazard.width - 6; x += 18) {
+        for (let y = hazard.y + 12; y < hazard.y + hazard.height - 6; y += 18) {
+          const flicker = (Math.sin(localTime * 6 + x * 0.11 + y * 0.17) + 1) * 0.5;
+          this.hazardGraphics.fillStyle(0xfde047, 0.2 + flicker * 0.62);
+          this.hazardGraphics.fillCircle(x, y, 1.5 + flicker * 1.5);
+        }
+      }
+      return;
+    }
+
+    const pulse = 0.45 + (Math.sin(localTime * 1.6) + 1) * 0.2;
+    this.hazardGraphics.fillStyle(0x020617, 0.96);
+    this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+    this.hazardGraphics.fillStyle(0x0f172a, 0.78 + pulse * 0.18);
+    this.hazardGraphics.fillRoundedRect(
+      hazard.x + 6,
+      hazard.y + 6,
+      hazard.width - 12,
+      hazard.height - 12,
+      8
+    );
+    this.hazardGraphics.lineStyle(3, 0x64748b, 0.48 + pulse * 0.32);
+    this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
+
+    const centerX = hazard.x + hazard.width / 2;
+    const centerY = hazard.y + hazard.height / 2;
+    const maxRadius = Math.min(hazard.width, hazard.height) / 2 - 10;
+    this.hazardGraphics.lineStyle(2, 0x334155, 0.36 + pulse * 0.28);
+    const swirl = localTime * 0.9;
+    for (let radius = maxRadius; radius > 8; radius -= 10) {
+      const wobbleX = Math.cos(swirl + radius * 0.09) * 2;
+      const wobbleY = Math.sin(swirl + radius * 0.11) * 2;
+      this.hazardGraphics.strokeEllipse(centerX + wobbleX, centerY + wobbleY, radius * 2, radius * 1.2);
+    }
+    this.hazardGraphics.fillStyle(0x020617, 0.95);
+    this.hazardGraphics.fillEllipse(centerX, centerY, maxRadius * 1.3, maxRadius * 0.75);
+
+    this.hazardGraphics.lineStyle(2, 0x475569, 0.38);
+    for (let arc = 0; arc < 5; arc += 1) {
+      const start = swirl + arc * 1.2;
+      const end = start + 0.75;
+      this.hazardGraphics.beginPath();
+      this.hazardGraphics.arc(centerX, centerY, maxRadius * 0.72 + arc * 2, start, end, false);
+      this.hazardGraphics.strokePath();
+    }
+  }
+
+  private createHazardLabel(hazard: HazardZone): void {
+    let title = "ZONE";
+    let icon = "◼";
+    if (hazard.type === "lava") {
       title = "LAVA";
+      icon = "🔥";
     } else if (hazard.type === "electric") {
-      color = 0xf59e0b;
-      edgeColor = 0xfacc15;
-      title = "ELEKTRO";
+      title = "ELEKTROFELD";
+      icon = "⚡";
     } else if (hazard.type === "pit") {
-      color = 0x111827;
-      edgeColor = 0x64748b;
       title = "ABGRUND";
+      icon = "🌀";
     }
 
-    this.arenaGraphics.fillStyle(color, hazard.type === "pit" ? 0.97 : 0.84);
-    this.arenaGraphics.fillRect(hazard.x, hazard.y, hazard.width, hazard.height);
-    this.arenaGraphics.lineStyle(3, edgeColor, 0.45);
-    this.arenaGraphics.strokeRect(hazard.x, hazard.y, hazard.width, hazard.height);
-
-    this.decorGraphics.lineStyle(1, edgeColor, 0.3);
-    for (let i = 10; i < hazard.width; i += 18) {
-      this.decorGraphics.lineBetween(hazard.x + i, hazard.y, hazard.x, hazard.y + i);
-    }
-
+    // Kleine Label-Box mit Icon verbessert Lesbarkeit in hektischen Situationen.
     const label = this.add
-      .text(hazard.x + 10, hazard.y + 8, title, {
+      .text(hazard.x + 10, hazard.y + 8, `${icon} ${title}`, {
         fontSize: "12px",
-        color: "#e2e8f0",
+        color: "#f8fafc",
         fontStyle: "bold",
+        backgroundColor: "#0f172acc",
+        padding: { left: 8, right: 8, top: 4, bottom: 4 },
       })
       .setDepth(4);
     this.hazardLabels.push(label);
