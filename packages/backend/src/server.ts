@@ -1,4 +1,6 @@
-import { createServer } from "http";
+import { createServer, type ServerResponse } from "http";
+import { createReadStream, existsSync, statSync } from "fs";
+import path from "path";
 import { Server } from "socket.io";
 import type {
   ServerToClientEvents,
@@ -46,6 +48,23 @@ const AI_ENERGY_SAVE_THRESHOLD = 26;
 const AI_ENERGY_REENGAGE_THRESHOLD = 62;
 const AI_ENERGY_CRITICAL_THRESHOLD = 12;
 
+// Das gebaute Frontend wird im Produktivbetrieb vom Backend auf derselben Domain ausgeliefert.
+const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
+const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+};
+
 interface ServerPlayer {
   id: string;
   name: string;
@@ -69,7 +88,75 @@ interface ServerPlayer {
   aiConserveEnergy: boolean;
 }
 
-const httpServer = createServer();
+function contentTypeFor(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  return MIME_BY_EXTENSION[extension] ?? "application/octet-stream";
+}
+
+function tryServeFrontend(requestPath: string, method: string, res: ServerResponse): boolean {
+  if (method !== "GET" && method !== "HEAD") {
+    return false;
+  }
+
+  // Socket.IO-Endpunkte niemals als statische Datei behandeln.
+  if (requestPath.startsWith("/socket.io/")) {
+    return false;
+  }
+
+  const normalized = requestPath === "/" ? "/index.html" : requestPath;
+  const absoluteFilePath = path.normalize(path.join(FRONTEND_DIST_PATH, normalized));
+
+  // Schutz gegen Pfad-Traversal ausserhalb von dist.
+  if (!absoluteFilePath.startsWith(FRONTEND_DIST_PATH)) {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Bad Request");
+    return true;
+  }
+
+  // Wenn eine Datei existiert, wird sie direkt ausgeliefert (z. B. JS/CSS/Assets).
+  if (existsSync(absoluteFilePath) && statSync(absoluteFilePath).isFile()) {
+    res.writeHead(200, { "Content-Type": contentTypeFor(absoluteFilePath) });
+    if (method === "HEAD") {
+      res.end();
+    } else {
+      createReadStream(absoluteFilePath).pipe(res);
+    }
+    return true;
+  }
+
+  // SPA-Fallback: unbekannte Routen liefern index.html.
+  if (existsSync(FRONTEND_INDEX_PATH)) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    if (method === "HEAD") {
+      res.end();
+    } else {
+      createReadStream(FRONTEND_INDEX_PATH).pipe(res);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+const httpServer = createServer((req, res) => {
+  const rawUrl = req.url ?? "/";
+  const requestPath = rawUrl.split("?")[0] ?? "/";
+
+  // Diese Route wird in Coolify oft fuer Health-Checks verwendet.
+  if (requestPath === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, tick }));
+    return;
+  }
+
+  if (tryServeFrontend(requestPath, req.method ?? "GET", res)) {
+    return;
+  }
+
+  // Falls kein Frontend-Build vorhanden ist, eine klare Meldung statt leerem 404.
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Not Found - Frontend build is missing. Run npm run build first.");
+});
 
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {

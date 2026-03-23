@@ -9,7 +9,10 @@ import type {
   ServerToClientEvents,
 } from "@projekt/shared";
 
-const SERVER_URL = "http://localhost:3000";
+// In Produktion verwenden wir standardmaessig dieselbe Origin wie die Seite selbst.
+// Optional kann die URL fuer Sonderfaelle ueber VITE_SERVER_URL gesetzt werden.
+const SERVER_URL =
+  (import.meta.env.VITE_SERVER_URL as string | undefined) ?? window.location.origin;
 
 const nameOverlay = document.getElementById("name-overlay") as HTMLDivElement | null;
 const nameInput = document.getElementById("name-input") as HTMLInputElement | null;
