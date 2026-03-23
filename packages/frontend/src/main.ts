@@ -92,6 +92,10 @@ class GameScene extends Phaser.Scene {
   private snapshot: GameSnapshot | null = null;
   private localPlayerId = "";
   private inputSeq = 0;
+  private smoothedDeltaMs = 16.67;
+  private hazardFrameCounter = 0;
+  private hazardFrameSkip = 1;
+  private hazardDetailLevel: "high" | "medium" | "low" = "high";
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -245,9 +249,14 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    this.updatePerformanceProfile();
+
     // Animierte Gefahren laufen dauerhaft mit, auch wenn sich Snapshot-Daten nicht aendern.
     if (this.snapshot) {
-      this.drawHazards(this.time.now / 1000);
+      this.hazardFrameCounter += 1;
+      if (this.hazardFrameCounter % this.hazardFrameSkip === 0) {
+        this.drawHazards(this.time.now / 1000);
+      }
     }
 
     const player = this.getLocalPlayer();
@@ -269,6 +278,26 @@ class GameScene extends Phaser.Scene {
 
     socket.emit("input", payload);
     this.drawAim(player, payload);
+  }
+
+  private updatePerformanceProfile(): void {
+    const delta = this.game.loop.delta;
+    this.smoothedDeltaMs = Phaser.Math.Linear(this.smoothedDeltaMs, delta, 0.08);
+
+    if (this.smoothedDeltaMs > 28) {
+      this.hazardDetailLevel = "low";
+      this.hazardFrameSkip = 3;
+      return;
+    }
+
+    if (this.smoothedDeltaMs > 20) {
+      this.hazardDetailLevel = "medium";
+      this.hazardFrameSkip = 2;
+      return;
+    }
+
+    this.hazardDetailLevel = "high";
+    this.hazardFrameSkip = 1;
   }
 
   private resizeToArena(): void {
@@ -386,11 +415,15 @@ class GameScene extends Phaser.Scene {
     // Dynamische Ebene: Hazards werden pro Frame neu gezeichnet, damit Animationen fluessig wirken.
     this.hazardGraphics.clear();
     for (const hazard of this.snapshot.arena.hazards) {
-      this.drawHazard(hazard, timeSeconds);
+      this.drawHazard(hazard, timeSeconds, this.hazardDetailLevel);
     }
   }
 
-  private drawHazard(hazard: HazardZone, timeSeconds: number): void {
+  private drawHazard(
+    hazard: HazardZone,
+    timeSeconds: number,
+    detailLevel: "high" | "medium" | "low"
+  ): void {
     // localTime verschiebt Animationen pro Zone leicht, damit nicht alles synchron "blinkt".
     const localTime = timeSeconds + hazard.x * 0.003 + hazard.y * 0.002;
 
@@ -418,7 +451,8 @@ class GameScene extends Phaser.Scene {
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
 
       this.hazardGraphics.lineStyle(2, 0xfdba74, 0.34 + pulse * 0.14);
-      for (let y = hazard.y + 8; y < hazard.y + hazard.height - 6; y += 12) {
+      const waveStep = detailLevel === "high" ? 12 : detailLevel === "medium" ? 16 : 22;
+      for (let y = hazard.y + 8; y < hazard.y + hazard.height - 6; y += waveStep) {
         const sway = Math.sin(localTime * 3 + y * 0.08) * 3;
         this.hazardGraphics.beginPath();
         this.hazardGraphics.moveTo(hazard.x + 8, y);
@@ -428,9 +462,10 @@ class GameScene extends Phaser.Scene {
         this.hazardGraphics.strokePath();
       }
 
-      for (let i = 0; i < 8; i += 1) {
+      const bubbleCount = detailLevel === "high" ? 8 : detailLevel === "medium" ? 5 : 3;
+      for (let i = 0; i < bubbleCount; i += 1) {
         const phase = localTime * (1.6 + i * 0.1) + i * 0.7;
-        const bubbleX = hazard.x + 14 + ((i + 1) / 9) * (hazard.width - 28);
+        const bubbleX = hazard.x + 14 + ((i + 1) / (bubbleCount + 1)) * (hazard.width - 28);
         const bubbleY = hazard.y + 16 + ((Math.sin(phase) + 1) * 0.5) * (hazard.height - 32);
         const bubbleR = 1.8 + ((Math.cos(phase * 1.3) + 1) * 0.5) * 2.2;
         this.hazardGraphics.fillStyle(0xfef08a, 0.25 + ((Math.sin(phase * 2) + 1) * 0.5) * 0.3);
@@ -455,8 +490,9 @@ class GameScene extends Phaser.Scene {
       this.hazardGraphics.lineStyle(3, 0xfacc15, 0.56 + pulse * 0.32);
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
 
-      for (let x = hazard.x + 12; x < hazard.x + hazard.width - 6; x += 18) {
-        for (let y = hazard.y + 12; y < hazard.y + hazard.height - 6; y += 18) {
+      const sparkStep = detailLevel === "high" ? 18 : detailLevel === "medium" ? 24 : 30;
+      for (let x = hazard.x + 12; x < hazard.x + hazard.width - 6; x += sparkStep) {
+        for (let y = hazard.y + 12; y < hazard.y + hazard.height - 6; y += sparkStep) {
           const flicker = (Math.sin(localTime * 6 + x * 0.11 + y * 0.17) + 1) * 0.5;
           this.hazardGraphics.fillStyle(0xfde047, 0.2 + flicker * 0.62);
           this.hazardGraphics.fillCircle(x, y, 1.5 + flicker * 1.5);
@@ -484,7 +520,8 @@ class GameScene extends Phaser.Scene {
     const maxRadius = Math.min(hazard.width, hazard.height) / 2 - 10;
     this.hazardGraphics.lineStyle(2, 0x334155, 0.36 + pulse * 0.28);
     const swirl = localTime * 0.9;
-    for (let radius = maxRadius; radius > 8; radius -= 10) {
+    const radiusStep = detailLevel === "high" ? 10 : detailLevel === "medium" ? 14 : 18;
+    for (let radius = maxRadius; radius > 8; radius -= radiusStep) {
       const wobbleX = Math.cos(swirl + radius * 0.09) * 2;
       const wobbleY = Math.sin(swirl + radius * 0.11) * 2;
       this.hazardGraphics.strokeEllipse(centerX + wobbleX, centerY + wobbleY, radius * 2, radius * 1.2);
@@ -493,7 +530,8 @@ class GameScene extends Phaser.Scene {
     this.hazardGraphics.fillEllipse(centerX, centerY, maxRadius * 1.3, maxRadius * 0.75);
 
     this.hazardGraphics.lineStyle(2, 0x475569, 0.38);
-    for (let arc = 0; arc < 5; arc += 1) {
+    const arcCount = detailLevel === "high" ? 5 : detailLevel === "medium" ? 3 : 2;
+    for (let arc = 0; arc < arcCount; arc += 1) {
       const start = swirl + arc * 1.2;
       const end = start + 0.75;
       this.hazardGraphics.beginPath();
@@ -654,6 +692,12 @@ const config: Phaser.Types.Core.GameConfig = {
   width: 1280,
   height: 720,
   backgroundColor: "#111827",
+  antialias: false,
+  powerPreference: "high-performance",
+  fps: {
+    target: 60,
+    min: 30,
+  },
   scene: [GameScene],
   parent: document.body,
 };
