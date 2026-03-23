@@ -96,6 +96,7 @@ class GameScene extends Phaser.Scene {
   private hazardFrameCounter = 0;
   private hazardFrameSkip = 1;
   private hazardDetailLevel: "high" | "medium" | "low" = "high";
+  private lastInputSentAt = 0;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -235,6 +236,12 @@ class GameScene extends Phaser.Scene {
       }
     });
 
+    this.scale.on("resize", () => {
+      this.layoutHud();
+      this.renderHudPanel();
+    });
+    window.addEventListener("resize", this.handleWindowResize);
+
     this.updateStatus();
 
     socket.on("connect", this.onConnect);
@@ -276,7 +283,10 @@ class GameScene extends Phaser.Scene {
       aimY: this.pointerWorld.y || player.y,
     };
 
-    socket.emit("input", payload);
+    if (this.time.now - this.lastInputSentAt >= 33) {
+      socket.emit("input", payload);
+      this.lastInputSentAt = this.time.now;
+    }
     this.drawAim(player, payload);
   }
 
@@ -306,13 +316,30 @@ class GameScene extends Phaser.Scene {
     }
 
     const { width, height } = this.snapshot.arena;
-    const gameSize = this.scale.gameSize;
-    if (gameSize.width !== width || gameSize.height !== height) {
-      this.scale.resize(width, height);
-      this.cameras.main.setBounds(0, 0, width, height);
-      this.layoutHud();
-      this.renderHudPanel();
+    this.fitArenaToViewport(width, height);
+  }
+
+  private readonly handleWindowResize = (): void => {
+    if (!this.snapshot) {
+      return;
     }
+    this.fitArenaToViewport(this.snapshot.arena.width, this.snapshot.arena.height);
+  };
+
+  private fitArenaToViewport(arenaWidth: number, arenaHeight: number): void {
+    const viewportWidth = Math.max(960, Math.floor(window.innerWidth));
+    const viewportHeight = Math.max(540, Math.floor(window.innerHeight));
+    const gameSize = this.scale.gameSize;
+
+    if (gameSize.width !== viewportWidth || gameSize.height !== viewportHeight) {
+      this.scale.resize(viewportWidth, viewportHeight);
+    }
+
+    const camera = this.cameras.main;
+    const zoom = Math.min(viewportWidth / arenaWidth, viewportHeight / arenaHeight);
+    camera.setBounds(0, 0, arenaWidth, arenaHeight);
+    camera.setZoom(Math.max(0.6, Math.min(1.25, zoom)));
+    camera.centerOn(arenaWidth / 2, arenaHeight / 2);
   }
 
   private layoutHud(): void {
@@ -681,6 +708,7 @@ class GameScene extends Phaser.Scene {
       label.destroy();
     }
     this.nameLabels.clear();
+    window.removeEventListener("resize", this.handleWindowResize);
   }
 }
 
