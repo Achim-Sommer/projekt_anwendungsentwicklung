@@ -40,6 +40,9 @@ const ORB_VALUE_MAX = 8;
 const KILL_MASS_BONUS = 12;
 const CONSUME_MIN_RATIO = 1.22;
 const CONSUME_MASS_GAIN = 0.22;
+const HAZARD_DEATH_OVERLAP_RATIO = 0.55;
+const HAZARD_DEATH_OVERLAP_MIN = 10;
+const HAZARD_DEATH_OVERLAP_MAX = 24;
 
 const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
@@ -299,12 +302,24 @@ function applyMass(player: ServerPlayer, amount: number): void {
 
 function isInHazard(player: ServerPlayer): boolean {
   return arena.hazards.some((hazard) => {
-    return (
-      player.x + player.radius > hazard.x &&
-      player.x - player.radius < hazard.x + hazard.width &&
-      player.y + player.radius > hazard.y &&
-      player.y - player.radius < hazard.y + hazard.height
+    const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
+    const nearestY = clamp(player.y, hazard.y, hazard.y + hazard.height);
+    const dx = player.x - nearestX;
+    const dy = player.y - nearestY;
+    const distance = Math.hypot(dx, dy);
+
+    if (distance >= player.radius) {
+      return false;
+    }
+
+    const overlapDepth = player.radius - distance;
+    const requiredDepth = clamp(
+      player.radius * HAZARD_DEATH_OVERLAP_RATIO,
+      HAZARD_DEATH_OVERLAP_MIN,
+      HAZARD_DEATH_OVERLAP_MAX,
     );
+
+    return overlapDepth >= requiredDepth;
   });
 }
 
