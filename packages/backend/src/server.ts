@@ -13,8 +13,8 @@ import type {
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
-const TICK_RATE = 24;
-const SNAPSHOT_RATE = 8;
+const TICK_RATE = 20;
+const SNAPSHOT_RATE = 7;
 const DT = 1 / TICK_RATE;
 
 const PLAYER_START_MASS = 20;
@@ -30,13 +30,13 @@ const CHARGE_MAX = 100;
 const CHARGE_GAIN_RATE = 126;
 const CHARGE_DECAY_RATE = 30;
 const RESPAWN_TIME_MS = 1800;
-const TARGET_TOTAL_PLAYERS = 5;
+const TARGET_TOTAL_PLAYERS = 4;
 
-const ORB_SPAWN_INTERVAL_MS = 420;
-const ORB_MAX_COUNT = 170;
+const ORB_SPAWN_INTERVAL_MS = 520;
+const ORB_MAX_COUNT = 90;
 const ORB_RADIUS = 6;
-const ORB_VALUE_MIN = 2;
-const ORB_VALUE_MAX = 5;
+const ORB_VALUE_MIN = 4;
+const ORB_VALUE_MAX = 8;
 const KILL_MASS_BONUS = 12;
 const KILL_SCORE_BONUS = 5;
 
@@ -691,7 +691,9 @@ function tickSimulation(): void {
 
   maintainBots();
   spawnOrb(now);
-  runAi(now);
+  if (tick % 3 === 0) {
+    runAi(now);
+  }
   handleRespawns(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);

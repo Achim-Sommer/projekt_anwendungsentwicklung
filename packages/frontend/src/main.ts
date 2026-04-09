@@ -119,6 +119,7 @@ class GameScene extends Phaser.Scene {
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
+  private lastLabelText = new Map<string, string>();
 
   private snapshot: GameSnapshot | null = null;
   private localPlayerId = "";
@@ -305,7 +306,7 @@ class GameScene extends Phaser.Scene {
       aimY: this.pointerWorld.y || player.y,
     };
 
-    if (this.time.now - this.lastInputSentAt >= 33) {
+    if (this.time.now - this.lastInputSentAt >= 50) {
       socket.emit("input", payload);
       this.lastInputSentAt = this.time.now;
     }
@@ -390,8 +391,8 @@ class GameScene extends Phaser.Scene {
   };
 
   private fitArenaToViewport(arenaWidth: number, arenaHeight: number): void {
-    const viewportWidth = Math.max(960, Math.floor(window.innerWidth));
-    const viewportHeight = Math.max(540, Math.floor(window.innerHeight));
+    const viewportWidth = Math.max(320, Math.floor(window.innerWidth));
+    const viewportHeight = Math.max(240, Math.floor(window.innerHeight));
     const gameSize = this.scale.gameSize;
 
     if (gameSize.width !== viewportWidth || gameSize.height !== viewportHeight) {
@@ -401,52 +402,78 @@ class GameScene extends Phaser.Scene {
     const camera = this.cameras.main;
     const zoom = Math.min(viewportWidth / arenaWidth, viewportHeight / arenaHeight);
     camera.setBounds(0, 0, arenaWidth, arenaHeight);
-    camera.setZoom(Math.max(0.6, Math.min(1.25, zoom)));
+    camera.setZoom(Math.max(0.42, Math.min(1.65, zoom)));
     camera.centerOn(arenaWidth / 2, arenaHeight / 2);
   }
 
   private layoutHud(): void {
-    const { panelX } = this.getHudLayout();
+    const { panelX, panelY, panelWidth, compact, ultraCompact } = this.getHudLayout();
 
-    this.statusText.setPosition(panelX + 16, 16);
-    this.hudText.setPosition(panelX + 16, 40);
-    this.scoreText.setPosition(panelX + 16, 72);
-    if (this.hudCompact) {
-      this.controlsTitle.setPosition(panelX + 16, 154);
-      this.controlsText.setPosition(panelX + 16, 174);
+    this.statusText.setPosition(panelX + 12, panelY + 12);
+    this.hudText.setPosition(panelX + 12, panelY + 34);
+    this.scoreText.setPosition(panelX + 12, panelY + 58);
+    if (ultraCompact) {
+      this.controlsTitle.setPosition(panelX + 12, panelY + 118);
+      this.controlsText.setPosition(panelX + 12, panelY + 136);
+    } else if (compact) {
+      this.controlsTitle.setPosition(panelX + 12, panelY + 142);
+      this.controlsText.setPosition(panelX + 12, panelY + 160);
     } else {
-      this.controlsTitle.setPosition(panelX + 16, 178);
-      this.controlsText.setPosition(panelX + 16, 200);
+      this.controlsTitle.setPosition(panelX + 12, panelY + 166);
+      this.controlsText.setPosition(panelX + 12, panelY + 186);
     }
+
+    this.statusText.setFontSize(ultraCompact ? 12 : 14);
+    this.hudText.setFontSize(ultraCompact ? 11 : 13);
+    this.scoreText.setFontSize(ultraCompact ? 10 : 12);
+    this.controlsTitle.setFontSize(ultraCompact ? 11 : 13);
+    this.controlsText.setFontSize(ultraCompact ? 10 : 12);
+    this.scoreText.setWordWrapWidth(panelWidth - 20, true);
+    this.controlsText.setWordWrapWidth(panelWidth - 20, true);
   }
 
   private renderHudPanel(): void {
-    const { panelWidth, panelX, panelHeight, compact } = this.getHudLayout();
+    const { panelWidth, panelX, panelHeight, panelY, compact } = this.getHudLayout();
     this.hudCompact = compact;
-    const panelY = 10;
 
     this.hudPanel.clear();
-    this.hudPanel.fillStyle(0x0b1120, 0.7);
+    this.hudPanel.fillStyle(0x0b1120, 0.62);
     this.hudPanel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
     this.hudPanel.lineStyle(2, 0x38bdf8, 0.38);
     this.hudPanel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
     this.hudPanel.lineStyle(1, 0x94a3b8, 0.2);
-    this.hudPanel.lineBetween(panelX + 14, 62, panelX + panelWidth - 14, 62);
-    this.hudPanel.lineBetween(panelX + 14, compact ? 146 : 168, panelX + panelWidth - 14, compact ? 146 : 168);
+    this.hudPanel.lineBetween(panelX + 10, panelY + 52, panelX + panelWidth - 10, panelY + 52);
+    this.hudPanel.lineBetween(
+      panelX + 10,
+      panelY + (compact ? 132 : 154),
+      panelX + panelWidth - 10,
+      panelY + (compact ? 132 : 154)
+    );
   }
 
   private getHudLayout(): {
     panelWidth: number;
     panelX: number;
     panelHeight: number;
+    panelY: number;
     compact: boolean;
+    ultraCompact: boolean;
   } {
-    const margin = 12;
-    const panelWidth = Math.min(360, Math.max(250, this.scale.width - margin * 2));
-    const panelX = Math.max(margin, this.scale.width - panelWidth - margin);
-    const compact = this.scale.height < 720 || this.scale.width < 1180;
-    const panelHeight = compact ? 280 : 320;
-    return { panelWidth, panelX, panelHeight, compact };
+    const margin = this.scale.width < 620 ? 8 : 12;
+    const narrow = this.scale.width < 960;
+    const ultraCompact = this.scale.width < 720 || this.scale.height < 520;
+    const panelWidth = narrow
+      ? Math.min(340, Math.max(200, this.scale.width - margin * 2))
+      : this.scale.width >= 2200
+        ? 500
+        : this.scale.width >= 1600
+          ? 440
+          : Math.min(360, Math.max(250, this.scale.width - margin * 2));
+    const panelX = narrow ? margin : Math.max(margin, this.scale.width - panelWidth - margin);
+    const compact = this.scale.height < 760 || this.scale.width < 1180;
+    const panelHeight = ultraCompact ? 182 : compact ? 254 : 300;
+    const panelY = ultraCompact ? this.scale.height - panelHeight - margin : margin;
+    return { panelWidth, panelX, panelHeight, panelY, compact, ultraCompact };
   }
 
   private drawArena(): void {
@@ -470,23 +497,24 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics.fillRoundedRect(10, 10, this.snapshot.arena.width - 20, this.snapshot.arena.height - 20, 24);
 
     // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
-    const tileSize = 56;
+    const drawFullDecor = this.scale.width >= 900 && this.scale.height >= 600;
+    const tileSize = drawFullDecor ? 72 : 120;
     for (let y = 24; y < this.snapshot.arena.height - 24; y += tileSize) {
       for (let x = 24; x < this.snapshot.arena.width - 24; x += tileSize) {
         const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
-        this.decorGraphics.fillStyle(isAlt ? 0x111f38 : 0x0f1a2f, isAlt ? 0.44 : 0.28);
-        this.decorGraphics.fillRoundedRect(x, y, tileSize - 8, tileSize - 8, 8);
-        this.decorGraphics.lineStyle(1, 0x3b82f6, isAlt ? 0.16 : 0.1);
-        this.decorGraphics.strokeRoundedRect(x, y, tileSize - 8, tileSize - 8, 8);
+        this.decorGraphics.fillStyle(isAlt ? 0x111f38 : 0x0f1a2f, drawFullDecor ? 0.36 : 0.2);
+        this.decorGraphics.fillRoundedRect(x, y, tileSize - 10, tileSize - 10, 8);
       }
     }
 
-    this.decorGraphics.lineStyle(1, 0x1e293b, 0.35);
-    for (let x = 24; x < this.snapshot.arena.width - 20; x += tileSize) {
-      this.decorGraphics.lineBetween(x, 20, x, this.snapshot.arena.height - 20);
-    }
-    for (let y = 24; y < this.snapshot.arena.height - 20; y += tileSize) {
-      this.decorGraphics.lineBetween(20, y, this.snapshot.arena.width - 20, y);
+    if (drawFullDecor) {
+      this.decorGraphics.lineStyle(1, 0x1e293b, 0.28);
+      for (let x = 24; x < this.snapshot.arena.width - 20; x += tileSize) {
+        this.decorGraphics.lineBetween(x, 20, x, this.snapshot.arena.height - 20);
+      }
+      for (let y = 24; y < this.snapshot.arena.height - 20; y += tileSize) {
+        this.decorGraphics.lineBetween(20, y, this.snapshot.arena.width - 20, y);
+      }
     }
 
     this.decorGraphics.lineStyle(2, 0x0ea5e9, 0.35);
@@ -520,8 +548,18 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    const view = this.cameras.main.worldView;
+    const margin = 50;
     this.pickupGraphics.clear();
     for (const orb of this.snapshot.pickups) {
+      if (
+        orb.x < view.x - margin ||
+        orb.x > view.right + margin ||
+        orb.y < view.y - margin ||
+        orb.y > view.bottom + margin
+      ) {
+        continue;
+      }
       this.drawOrb(orb);
     }
   }
@@ -601,6 +639,10 @@ class GameScene extends Phaser.Scene {
   }
 
   private createHazardLabel(hazard: HazardZone): void {
+    if (this.scale.width < 980 || this.scale.height < 620) {
+      return;
+    }
+
     let title = "ZONE";
     let icon = "◼";
     if (hazard.type === "lava") {
@@ -677,7 +719,11 @@ class GameScene extends Phaser.Scene {
       }
 
       label.setPosition(px, py - 42);
-      label.setText(`${player.name}${player.isBot ? " 🤖" : ""}  M:${player.mass.toFixed(0)}`);
+      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}  M:${player.mass.toFixed(0)}`;
+      if (this.lastLabelText.get(player.id) !== labelText) {
+        label.setText(labelText);
+        this.lastLabelText.set(player.id, labelText);
+      }
     }
 
     for (const [playerId, label] of this.nameLabels) {
@@ -685,6 +731,7 @@ class GameScene extends Phaser.Scene {
       if (!exists) {
         label.destroy();
         this.nameLabels.delete(playerId);
+        this.lastLabelText.delete(playerId);
       }
     }
   }
@@ -692,9 +739,12 @@ class GameScene extends Phaser.Scene {
   private drawAim(player: PlayerSnapshot, input: PlayerInputPayload): void {
     this.aimLine.clear();
     const color = input.charge ? 0xf97316 : 0x94a3b8;
+    const render = this.renderPlayers.get(player.id);
+    const px = render?.x ?? player.x;
+    const py = render?.y ?? player.y;
     this.aimLine.lineStyle(2, color, 0.85);
     this.aimLine.beginPath();
-    this.aimLine.moveTo(player.x, player.y);
+    this.aimLine.moveTo(px, py);
     this.aimLine.lineTo(input.aimX, input.aimY);
     this.aimLine.strokePath();
   }
@@ -715,11 +765,12 @@ class GameScene extends Phaser.Scene {
 
     const ranking = [...(this.snapshot?.players ?? [])]
       .sort((a, b) => b.score - a.score)
-      .slice(0, this.hudCompact ? 5 : 7)
+      .slice(0, this.hudCompact ? 4 : 6)
       .map((player, index) => {
         const rankBadge = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "•";
-        const suffix = player.isBot ? "🤖" : "⚔";
-        return `${rankBadge} ${String(index + 1).padStart(2, "0")}  ${player.name.padEnd(12, " ").slice(0, 12)} ${suffix}  ${String(player.score).padStart(2, "0")} KO  M${player.mass.toFixed(0)}`;
+        const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
+        const role = player.isBot ? "BOT" : "PLY";
+        return `${rankBadge} ${index + 1}. ${shortName} ${role}  S:${player.score}  M:${player.mass.toFixed(0)}`;
       })
       .join("\n");
 
@@ -754,6 +805,7 @@ class GameScene extends Phaser.Scene {
       label.destroy();
     }
     this.nameLabels.clear();
+    this.lastLabelText.clear();
     window.removeEventListener("resize", this.handleWindowResize);
   }
 }
@@ -769,8 +821,8 @@ const config: Phaser.Types.Core.GameConfig = {
   antialias: false,
   powerPreference: "high-performance",
   fps: {
-    target: 60,
-    min: 30,
+    target: 50,
+    min: 24,
   },
   scene: [GameScene],
   parent: document.body,
