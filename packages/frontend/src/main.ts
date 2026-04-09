@@ -131,7 +131,8 @@ class GameScene extends Phaser.Scene {
   private inputSeq = 0;
   private lastInputSentAt = 0;
   private hudCompact = false;
-  private leaderboardLines = 6;
+  private leaderboardLines = 8;
+  private readonly alwaysVisibleScoreboard = true;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -191,6 +192,7 @@ class GameScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor(0x111827);
+    this.cameras.main.roundPixels = true;
 
     this.hudPanel = this.add.graphics().setDepth(19).setScrollFactor(0);
     this.arenaGraphics = this.add.graphics();
@@ -498,8 +500,9 @@ class GameScene extends Phaser.Scene {
 
     this.statusText.setFontSize(ultraCompact ? 10 : 13);
     this.hudText.setFontSize(ultraCompact ? 10 : 12);
-    this.scoreText.setFontSize(compact ? 10 : 12);
+    this.scoreText.setFontSize(this.alwaysVisibleScoreboard ? 13 : compact ? 11 : 13);
     this.scoreText.setWordWrapWidth(panelWidth - 20, true);
+    this.scoreText.setVisible(true);
 
     // Controls-Text ausblenden: Agar.io-like UI ist deutlich cleaner.
     this.controlsTitle.setVisible(false);
@@ -511,9 +514,9 @@ class GameScene extends Phaser.Scene {
     this.hudCompact = compact;
 
     this.hudPanel.clear();
-    this.hudPanel.fillStyle(0x0b1120, 0.55);
+    this.hudPanel.fillStyle(0x0b1120, 0.72);
     this.hudPanel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
-    this.hudPanel.lineStyle(1.5, 0x38bdf8, 0.3);
+    this.hudPanel.lineStyle(1.5, 0x38bdf8, 0.42);
     this.hudPanel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
     this.hudPanel.lineStyle(1, 0x94a3b8, 0.22);
     this.hudPanel.lineBetween(panelX + 10, panelY + 42, panelX + panelWidth - 10, panelY + 42);
@@ -530,17 +533,29 @@ class GameScene extends Phaser.Scene {
     const margin = this.scale.width < 620 ? 8 : 12;
     const narrow = this.scale.width < 960;
     const ultraCompact = this.scale.width < 720 || this.scale.height < 520;
-    const panelWidth = narrow
-      ? Math.min(280, Math.max(180, this.scale.width - margin * 2))
-      : this.scale.width >= 2200
-        ? 380
-        : this.scale.width >= 1600
-          ? 340
-          : Math.min(300, Math.max(220, this.scale.width - margin * 2));
+    const panelWidth = this.alwaysVisibleScoreboard
+      ? narrow
+        ? Math.min(320, Math.max(240, this.scale.width - margin * 2))
+        : this.scale.width >= 2200
+          ? 420
+          : this.scale.width >= 1600
+            ? 380
+            : Math.min(340, Math.max(260, this.scale.width - margin * 2))
+      : narrow
+        ? Math.min(280, Math.max(180, this.scale.width - margin * 2))
+        : this.scale.width >= 2200
+          ? 380
+          : this.scale.width >= 1600
+            ? 340
+            : Math.min(300, Math.max(220, this.scale.width - margin * 2));
     const panelX = narrow ? margin : Math.max(margin, this.scale.width - panelWidth - margin);
     const compact = this.scale.height < 760 || this.scale.width < 1180;
-    this.leaderboardLines = ultraCompact ? 4 : compact ? 5 : 6;
-    const panelHeight = ultraCompact ? 112 : compact ? 144 : 176;
+    if (this.alwaysVisibleScoreboard) {
+      this.leaderboardLines = 8;
+    } else {
+      this.leaderboardLines = ultraCompact ? 4 : compact ? 5 : 6;
+    }
+    const panelHeight = this.alwaysVisibleScoreboard ? Math.min(232, this.scale.height - margin * 2) : ultraCompact ? 112 : compact ? 144 : 176;
     const panelY = margin;
     return { panelWidth, panelX, panelHeight, panelY, compact, ultraCompact };
   }
@@ -734,10 +749,37 @@ class GameScene extends Phaser.Scene {
 
     this.playerGraphics.clear();
 
+    const view = this.cameras.main.worldView;
+    const margin = 140;
+    const visiblePlayers: PlayerSnapshot[] = [];
+
     for (const player of this.snapshot.players) {
       if (!player.alive) {
         continue;
       }
+
+      const render = this.renderPlayers.get(player.id);
+      const px = render?.x ?? player.x;
+      const py = render?.y ?? player.y;
+      const radiusPad = player.radius + margin;
+
+      if (
+        px + radiusPad < view.x ||
+        px - radiusPad > view.right ||
+        py + radiusPad < view.y ||
+        py - radiusPad > view.bottom
+      ) {
+        continue;
+      }
+
+      visiblePlayers.push(player);
+    }
+
+    const crowdedView = visiblePlayers.length >= 14;
+    const veryCrowdedView = visiblePlayers.length >= 22;
+    const showNameLabels = visiblePlayers.length <= 28;
+
+    for (const player of visiblePlayers) {
 
       const isLocal = player.id === this.localPlayerId;
       this.playerGraphics.fillStyle(player.color, 1);
@@ -747,22 +789,28 @@ class GameScene extends Phaser.Scene {
 
       this.playerGraphics.fillCircle(px, py, player.radius);
 
-      this.playerGraphics.lineStyle(isLocal ? 4 : 2, isLocal ? 0xffffff : 0x111827, 0.9);
+      const strokeWidth = isLocal ? 4 : crowdedView ? 1 : 2;
+      this.playerGraphics.lineStyle(strokeWidth, isLocal ? 0xffffff : 0x111827, 0.9);
       this.playerGraphics.strokeCircle(px, py, player.radius + (isLocal ? 3 : 1));
 
-      const energyWidth = 36;
-      const ratio = Phaser.Math.Clamp(player.charge / Math.max(1, player.chargeMax), 0, 1);
-      this.playerGraphics.fillStyle(0x111827, 0.8);
-      this.playerGraphics.fillRect(px - energyWidth / 2, py - 30, energyWidth, 5);
-      this.playerGraphics.fillStyle(0x22d3ee, 0.95);
-      this.playerGraphics.fillRect(
-        px - energyWidth / 2,
-        py - 30,
-        energyWidth * ratio,
-        5
-      );
-      this.playerGraphics.fillStyle(0xfacc15, 0.95);
-      this.playerGraphics.fillCircle(px, py, Math.max(2, player.mass * 0.06));
+      if (!veryCrowdedView || isLocal) {
+        const energyWidth = 36;
+        const ratio = Phaser.Math.Clamp(player.charge / Math.max(1, player.chargeMax), 0, 1);
+        this.playerGraphics.fillStyle(0x111827, 0.8);
+        this.playerGraphics.fillRect(px - energyWidth / 2, py - 30, energyWidth, 5);
+        this.playerGraphics.fillStyle(0x22d3ee, 0.95);
+        this.playerGraphics.fillRect(
+          px - energyWidth / 2,
+          py - 30,
+          energyWidth * ratio,
+          5
+        );
+      }
+
+      if (!crowdedView || isLocal) {
+        this.playerGraphics.fillStyle(0xfacc15, 0.95);
+        this.playerGraphics.fillCircle(px, py, Math.max(2, player.mass * 0.06));
+      }
 
       let label = this.nameLabels.get(player.id);
       if (!label) {
@@ -777,6 +825,7 @@ class GameScene extends Phaser.Scene {
       }
 
       label.setPosition(px, py - 42);
+      label.setVisible(showNameLabels || isLocal);
       const labelText = `${player.name}${player.isBot ? " 🤖" : ""}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
@@ -784,12 +833,20 @@ class GameScene extends Phaser.Scene {
       }
     }
 
+    const aliveIds = new Set<string>();
+    for (const player of this.snapshot.players) {
+      if (player.alive) {
+        aliveIds.add(player.id);
+      }
+    }
+
     for (const [playerId, label] of this.nameLabels) {
-      const exists = this.snapshot.players.some((player) => player.id === playerId && player.alive);
-      if (!exists) {
+      if (!aliveIds.has(playerId)) {
         label.destroy();
         this.nameLabels.delete(playerId);
         this.lastLabelText.delete(playerId);
+      } else if (!showNameLabels && playerId !== this.localPlayerId) {
+        label.setVisible(false);
       }
     }
   }
@@ -812,6 +869,8 @@ class GameScene extends Phaser.Scene {
   }
 
   private updateHud(): void {
+    this.scoreText.setVisible(true);
+
     const local = this.getLocalPlayer();
     if (local) {
       this.hudText.setText(

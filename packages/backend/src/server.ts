@@ -24,8 +24,8 @@ const PLAYER_DRAG = 0.83;
 const PUSH_RANGE = 175;
 const PUSH_MIN_MASS_RATIO = 1.15;
 const PUSH_CHARGE_MIN = 20;
-const PUSH_FORCE_BASE = 190;
-const PUSH_RECOIL_FACTOR = 0.3;
+const PUSH_FORCE_BASE = 290;
+const PUSH_RECOIL_FACTOR = 0.24;
 const CHARGE_MAX = 100;
 const CHARGE_GAIN_RATE = 126;
 const CHARGE_DECAY_RATE = 30;
@@ -581,7 +581,15 @@ function executePush(source: ServerPlayer, releasedCharge: number, candidates: S
   const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
   const massAdvantage = Math.pow(clamp(source.mass / Math.max(1, target.mass), 1, 3), 0.35);
   const chargeRatio = clamp(releasedCharge / CHARGE_MAX, 0, 1);
-  const deltaV = PUSH_FORCE_BASE * (0.6 + chargeRatio * 1.1) * massAdvantage;
+  const chargePower = Math.pow(chargeRatio, 1.22);
+  const sourceMassFactor = clamp(Math.pow(source.mass / PLAYER_START_MASS, 0.28), 1, 2.35);
+  const targetResistance = clamp(Math.pow(Math.max(1, target.mass) / Math.max(1, source.mass), 0.2), 0.72, 1.35);
+  const deltaV =
+    PUSH_FORCE_BASE *
+    (0.45 + chargePower * 1.95) *
+    massAdvantage *
+    sourceMassFactor /
+    targetResistance;
 
   target.vx += aim.x * deltaV;
   target.vy += aim.y * deltaV;
