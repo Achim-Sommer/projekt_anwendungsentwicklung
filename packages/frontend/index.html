@@ -13,15 +13,24 @@
 
       :root {
         color-scheme: dark;
+        --bg-deep: #050911;
+        --bg-mid: #101a2f;
+        --accent: #34d399;
+        --accent-2: #22d3ee;
+        --text-main: #f8fafc;
+        --text-sub: #94a3b8;
       }
 
       body {
-        background: radial-gradient(circle at 25% 20%, #1f2950 0%, #0f1428 55%, #090d1a 100%);
+        background:
+          radial-gradient(circle at 12% 18%, rgba(52, 211, 153, 0.16), transparent 32%),
+          radial-gradient(circle at 88% 78%, rgba(34, 211, 238, 0.12), transparent 34%),
+          linear-gradient(140deg, var(--bg-deep) 0%, var(--bg-mid) 56%, #0a1222 100%);
         display: flex;
         justify-content: center;
         align-items: center;
         min-height: 100vh;
-        font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
         overflow: hidden;
       }
 
@@ -31,8 +40,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(7, 10, 20, 0.78);
-        backdrop-filter: blur(8px);
+        background: rgba(3, 8, 15, 0.74);
+        backdrop-filter: blur(6px);
         z-index: 999;
       }
 
@@ -41,42 +50,47 @@
       }
 
       .name-card {
-        width: min(92vw, 430px);
-        background: linear-gradient(180deg, rgba(33, 42, 86, 0.96) 0%, rgba(17, 24, 39, 0.97) 100%);
-        border: 1px solid rgba(148, 163, 184, 0.32);
-        border-radius: 16px;
-        padding: 22px;
-        box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
+        width: min(92vw, 460px);
+        background: linear-gradient(160deg, rgba(13, 23, 34, 0.95), rgba(10, 18, 30, 0.97));
+        border: 1px solid rgba(52, 211, 153, 0.26);
+        border-radius: 18px;
+        padding: 24px;
+        box-shadow:
+          0 20px 55px rgba(0, 0, 0, 0.45),
+          0 0 0 1px rgba(34, 211, 238, 0.14) inset;
       }
 
       .name-card h1 {
-        font-size: 22px;
-        color: #e2e8f0;
-        margin-bottom: 6px;
+        font-size: 28px;
+        color: var(--text-main);
+        margin-bottom: 10px;
         letter-spacing: 0.02em;
+        text-transform: uppercase;
       }
 
       .name-card p {
-        color: #94a3b8;
+        color: var(--text-sub);
         font-size: 14px;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
         line-height: 1.4;
       }
 
       #name-input {
         width: 100%;
-        border: 1px solid rgba(148, 163, 184, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.32);
         border-radius: 12px;
-        padding: 12px 14px;
-        background: rgba(2, 6, 23, 0.62);
-        color: #f8fafc;
-        font-size: 16px;
+        padding: 13px 14px;
+        background: rgba(3, 9, 18, 0.72);
+        color: var(--text-main);
+        font-size: 17px;
+        letter-spacing: 0.03em;
         outline: none;
-        transition: border-color 0.2s ease;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
       }
 
       #name-input:focus {
-        border-color: rgba(34, 211, 238, 0.95);
+        border-color: rgba(52, 211, 153, 0.95);
+        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2);
       }
 
       .name-actions {
@@ -89,12 +103,17 @@
         width: 100%;
         border: none;
         border-radius: 12px;
-        padding: 12px 14px;
-        background: linear-gradient(90deg, #22d3ee 0%, #3b82f6 100%);
-        color: #0f172a;
+        padding: 13px 14px;
+        background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+        color: #062013;
         font-size: 15px;
         font-weight: 700;
         cursor: pointer;
+        letter-spacing: 0.04em;
+      }
+
+      #start-button:hover {
+        filter: brightness(1.06);
       }
 
       #start-button:disabled {
@@ -104,7 +123,7 @@
 
       #name-error {
         min-height: 18px;
-        margin-top: 8px;
+        margin-top: 10px;
         font-size: 13px;
         color: #fda4af;
       }
@@ -113,14 +132,15 @@
   <body>
     <div id="name-overlay">
       <div class="name-card">
-        <h1>Magnet Arena</h1>
-        <p>Gib deinen Namen ein, dann geht’s in die Arena. Ohne Name kein Match-Start.</p>
+        <h1>Force Pit Arena</h1>
+        <p>Wachse durch Orbs, lade Kraft auf und stoße kleinere Spieler in den Abgrund.</p>
         <input
           id="name-input"
           type="text"
           maxlength="16"
           placeholder="Dein Spielername"
           autocomplete="nickname"
+          autofocus
         />
         <div class="name-actions">
           <button id="start-button" type="button">In die Arena starten</button>

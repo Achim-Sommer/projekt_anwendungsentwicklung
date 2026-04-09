@@ -3,52 +3,47 @@ import { createReadStream, existsSync, statSync } from "fs";
 import path from "path";
 import { Server } from "socket.io";
 import type {
-  ServerToClientEvents,
-  ClientToServerEvents,
   ArenaState,
+  ClientToServerEvents,
+  ForceOrb,
   GameSnapshot,
-  MagnetMode,
   PlayerInputPayload,
   PlayerSnapshot,
+  ServerToClientEvents,
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 24;
-const SNAPSHOT_RATE = 10;
+const SNAPSHOT_RATE = 8;
 const DT = 1 / TICK_RATE;
 
-const PLAYER_RADIUS = 18;
-const PLAYER_ACCELERATION = 1450;
-const PLAYER_MAX_SPEED = 360;
-const PLAYER_DRAG = 0.89;
-const MOVEMENT_ENERGY_DRAIN = 16;
-const MOVEMENT_EXHAUST_THRESHOLD = 14;
-
-const MAGNET_RANGE = 300;
-const MAGNET_POWER = 920;
-const MAGNET_ENERGY_DRAIN = 30;
-const ENERGY_MAX = 100;
-const ENERGY_REGEN = 28;
-const KILL_ENERGY_BOOST = 35;
-const MAGNET_SPEED_DAMPING = 0.985;
-const CONTROL_SUPPRESSION_RECOVERY = 2.8;
-const CONTROL_SUPPRESSION_ON_HIT = 0.12;
-
+const PLAYER_START_MASS = 20;
+const PLAYER_ACCELERATION_BASE = 1700;
+const PLAYER_MAX_SPEED_BASE = 370;
+const PLAYER_DRAG = 0.83;
+const PUSH_RANGE = 175;
+const PUSH_MIN_MASS_RATIO = 1.15;
+const PUSH_CHARGE_MIN = 20;
+const PUSH_FORCE_BASE = 190;
+const PUSH_RECOIL_FACTOR = 0.3;
+const CHARGE_MAX = 100;
+const CHARGE_GAIN_RATE = 126;
+const CHARGE_DECAY_RATE = 30;
 const RESPAWN_TIME_MS = 1800;
-const TARGET_TOTAL_PLAYERS = 6;
+const TARGET_TOTAL_PLAYERS = 5;
 
-// KI-Tuning: weniger Bot-Klumpen, mehr aktive Kills ueber Gefahrenzonen.
-const AI_TARGET_RETHINK_BASE_MS = 300;
-const AI_TARGET_RETHINK_RANDOM_MS = 350;
+const ORB_SPAWN_INTERVAL_MS = 420;
+const ORB_MAX_COUNT = 170;
+const ORB_RADIUS = 6;
+const ORB_VALUE_MIN = 2;
+const ORB_VALUE_MAX = 5;
+const KILL_MASS_BONUS = 12;
+const KILL_SCORE_BONUS = 5;
+
+const AI_TARGET_RETHINK_BASE_MS = 320;
+const AI_TARGET_RETHINK_RANDOM_MS = 420;
 const AI_SEPARATION_RADIUS = 170;
-const AI_HAZARD_INTEREST_RANGE = 280;
-const AI_HAZARD_TRAP_DISTANCE = 120;
-const AI_PUSH_ALIGNMENT_THRESHOLD = 0.55;
-const AI_ENERGY_SAVE_THRESHOLD = 26;
-const AI_ENERGY_REENGAGE_THRESHOLD = 62;
-const AI_ENERGY_CRITICAL_THRESHOLD = 12;
 
-// Das gebaute Frontend wird im Produktivbetrieb vom Backend auf derselben Domain ausgeliefert.
 const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
 const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
 
@@ -74,18 +69,18 @@ interface ServerPlayer {
   vy: number;
   radius: number;
   color: number;
-  energy: number;
-  mode: MagnetMode;
+  mass: number;
+  charge: number;
   score: number;
   isBot: boolean;
   alive: boolean;
   respawnAt: number;
   lastInput: PlayerInputPayload;
+  lastChargePressed: boolean;
   lastThreatBy?: string;
   aiTargetId?: string;
+  aiTargetKind?: "player" | "orb";
   aiDecisionAt: number;
-  controlSuppression: number;
-  aiConserveEnergy: boolean;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -98,7 +93,6 @@ function tryServeFrontend(requestPath: string, method: string, res: ServerRespon
     return false;
   }
 
-  // Socket.IO-Endpunkte niemals als statische Datei behandeln.
   if (requestPath.startsWith("/socket.io/")) {
     return false;
   }
@@ -106,14 +100,12 @@ function tryServeFrontend(requestPath: string, method: string, res: ServerRespon
   const normalized = requestPath === "/" ? "/index.html" : requestPath;
   const absoluteFilePath = path.normalize(path.join(FRONTEND_DIST_PATH, normalized));
 
-  // Schutz gegen Pfad-Traversal ausserhalb von dist.
   if (!absoluteFilePath.startsWith(FRONTEND_DIST_PATH)) {
     res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("Bad Request");
     return true;
   }
 
-  // Wenn eine Datei existiert, wird sie direkt ausgeliefert (z. B. JS/CSS/Assets).
   if (existsSync(absoluteFilePath) && statSync(absoluteFilePath).isFile()) {
     res.writeHead(200, { "Content-Type": contentTypeFor(absoluteFilePath) });
     if (method === "HEAD") {
@@ -124,7 +116,6 @@ function tryServeFrontend(requestPath: string, method: string, res: ServerRespon
     return true;
   }
 
-  // SPA-Fallback: unbekannte Routen liefern index.html.
   if (existsSync(FRONTEND_INDEX_PATH)) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     if (method === "HEAD") {
@@ -142,7 +133,6 @@ const httpServer = createServer((req, res) => {
   const rawUrl = req.url ?? "/";
   const requestPath = rawUrl.split("?")[0] ?? "/";
 
-  // Diese Route wird in Coolify oft fuer Health-Checks verwendet.
   if (requestPath === "/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, tick }));
@@ -153,7 +143,6 @@ const httpServer = createServer((req, res) => {
     return;
   }
 
-  // Falls kein Frontend-Build vorhanden ist, eine klare Meldung statt leerem 404.
   res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("Not Found - Frontend build is missing. Run npm run build first.");
 });
@@ -169,6 +158,10 @@ const arena: ArenaState = {
   height: 900,
   hazards: [
     { id: "pit-mid", type: "pit", x: 735, y: 380, width: 130, height: 140 },
+    { id: "pit-north", type: "pit", x: 700, y: 120, width: 190, height: 95 },
+    { id: "pit-south", type: "pit", x: 670, y: 705, width: 240, height: 95 },
+    { id: "pit-west", type: "pit", x: 135, y: 360, width: 120, height: 160 },
+    { id: "pit-east", type: "pit", x: 1340, y: 330, width: 120, height: 170 },
     { id: "lava-left", type: "lava", x: 220, y: 640, width: 220, height: 110 },
     {
       id: "electric-right",
@@ -182,11 +175,39 @@ const arena: ArenaState = {
 };
 
 const players = new Map<string, ServerPlayer>();
-const socketsByPlayer = new Map<string, string>();
+const pickups = new Map<string, ForceOrb>();
 
 let tick = 0;
 let lastSnapshotAt = 0;
 let botCounter = 1;
+let orbCounter = 1;
+let lastOrbSpawnAt = 0;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalize(x: number, y: number): { x: number; y: number; length: number } {
+  const length = Math.hypot(x, y);
+  if (length < 0.0001) {
+    return { x: 0, y: 0, length: 0 };
+  }
+  return { x: x / length, y: y / length, length };
+}
+
+function massToRadius(mass: number): number {
+  return 10 + 1.9 * Math.sqrt(Math.max(1, mass));
+}
+
+function maxSpeedForMass(mass: number): number {
+  const speed = PLAYER_MAX_SPEED_BASE * Math.pow(Math.max(1, mass), -0.25);
+  return clamp(speed, 120, PLAYER_MAX_SPEED_BASE);
+}
+
+function accelerationForMass(mass: number): number {
+  const acceleration = PLAYER_ACCELERATION_BASE * Math.pow(Math.max(1, mass), -0.2);
+  return clamp(acceleration, 340, PLAYER_ACCELERATION_BASE);
+}
 
 function randomSpawn() {
   return {
@@ -197,17 +218,6 @@ function randomSpawn() {
 
 function randomColor() {
   return 0x44aaff + Math.floor(Math.random() * 0x884400);
-}
-
-function randomMode(): MagnetMode {
-  const modes: MagnetMode[] = [
-    "balanced",
-    "strong-push",
-    "long-pull",
-    "aoe",
-    "sticky",
-  ];
-  return modes[Math.floor(Math.random() * modes.length)] ?? "balanced";
 }
 
 function sanitizePlayerName(value: unknown): string {
@@ -231,10 +241,10 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     y: spawn.y,
     vx: 0,
     vy: 0,
-    radius: PLAYER_RADIUS,
+    radius: massToRadius(PLAYER_START_MASS),
     color: randomColor(),
-    energy: ENERGY_MAX,
-    mode: randomMode(),
+    mass: PLAYER_START_MASS,
+    charge: 0,
     score: 0,
     isBot,
     alive: true,
@@ -245,128 +255,85 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
       down: false,
       left: false,
       right: false,
-      push: false,
-      pull: false,
+      charge: false,
       aimX: spawn.x,
       aimY: spawn.y,
     },
+    lastChargePressed: false,
     aiDecisionAt: 0,
-    controlSuppression: 0,
-    aiConserveEnergy: false,
   };
 }
 
 function buildSnapshot(): GameSnapshot {
-  const playerSnapshots: PlayerSnapshot[] = Array.from(players.values()).map(
-    (player) => ({
-      id: player.id,
-      name: player.name,
-      x: player.x,
-      y: player.y,
-      vx: player.vx,
-      vy: player.vy,
-      radius: player.radius,
-      color: player.color,
-      energy: player.energy,
-      mode: player.mode,
-      score: player.score,
-      isBot: player.isBot,
-      alive: player.alive,
-    })
-  );
+  const playerSnapshots: PlayerSnapshot[] = Array.from(players.values()).map((player) => ({
+    id: player.id,
+    name: player.name,
+    x: player.x,
+    y: player.y,
+    vx: player.vx,
+    vy: player.vy,
+    radius: player.radius,
+    color: player.color,
+    mass: player.mass,
+    charge: player.charge,
+    chargeMax: CHARGE_MAX,
+    score: player.score,
+    isBot: player.isBot,
+    alive: player.alive,
+  }));
 
   return {
     tick,
     serverTime: Date.now(),
     arena,
     players: playerSnapshots,
+    pickups: Array.from(pickups.values()),
   };
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
+function applyMass(player: ServerPlayer, amount: number): void {
+  player.mass = clamp(player.mass + amount, 8, 140);
+  player.radius = massToRadius(player.mass);
 }
 
-function normalize(x: number, y: number): { x: number; y: number; length: number } {
-  const length = Math.hypot(x, y);
-  if (length < 0.0001) {
-    return { x: 0, y: 0, length: 0 };
-  }
-  return { x: x / length, y: y / length, length };
+function isInHazard(player: ServerPlayer): boolean {
+  return arena.hazards.some((hazard) => {
+    return (
+      player.x + player.radius > hazard.x &&
+      player.x - player.radius < hazard.x + hazard.width &&
+      player.y + player.radius > hazard.y &&
+      player.y - player.radius < hazard.y + hazard.height
+    );
+  });
 }
 
-function magnetModeMultiplier(mode: MagnetMode, action: "push" | "pull"): {
-  power: number;
-  range: number;
-  energy: number;
-} {
-  switch (mode) {
-    case "strong-push":
-      return action === "push"
-        ? { power: 1.7, range: 0.85, energy: 1.4 }
-        : { power: 0.8, range: 0.9, energy: 1.0 };
-    case "long-pull":
-      return action === "pull"
-        ? { power: 1.2, range: 1.45, energy: 1.25 }
-        : { power: 0.8, range: 1.0, energy: 1.0 };
-    case "aoe":
-      return { power: 0.95, range: 1.2, energy: 1.25 };
-    case "sticky":
-      return action === "pull"
-        ? { power: 1.05, range: 1.1, energy: 1.2 }
-        : { power: 0.85, range: 1.0, energy: 1.0 };
-    case "balanced":
-    default:
-      return { power: 1, range: 1, energy: 1 };
-  }
+function isPointInHazard(x: number, y: number): boolean {
+  return arena.hazards.some((hazard) => {
+    return x >= hazard.x && x <= hazard.x + hazard.width && y >= hazard.y && y <= hazard.y + hazard.height;
+  });
 }
 
-function knockOut(victim: ServerPlayer, actorId?: string): void {
-  if (!victim.alive) {
-    return;
-  }
+function hazardCenter(hazard: ArenaState["hazards"][number]): { x: number; y: number } {
+  return {
+    x: hazard.x + hazard.width / 2,
+    y: hazard.y + hazard.height / 2,
+  };
+}
 
-  victim.alive = false;
-  victim.vx = 0;
-  victim.vy = 0;
-  victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
+function nearestHazardCenter(target: ServerPlayer): { x: number; y: number } {
+  let best = hazardCenter(arena.hazards[0]);
+  let bestDistance = Number.POSITIVE_INFINITY;
 
-  const scorerId = actorId ?? victim.lastThreatBy;
-  if (scorerId && scorerId !== victim.id) {
-    const scorer = players.get(scorerId);
-    if (scorer) {
-      scorer.score += 1;
-      scorer.energy = clamp(scorer.energy + KILL_ENERGY_BOOST, 0, ENERGY_MAX);
+  for (const hazard of arena.hazards) {
+    const center = hazardCenter(hazard);
+    const distance = Math.hypot(center.x - target.x, center.y - target.y);
+    if (distance < bestDistance) {
+      best = center;
+      bestDistance = distance;
     }
   }
-}
 
-function handleRespawns(now: number): void {
-  for (const player of players.values()) {
-    if (player.alive || now < player.respawnAt) {
-      continue;
-    }
-
-    const spawn = randomSpawn();
-    player.x = spawn.x;
-    player.y = spawn.y;
-    player.vx = 0;
-    player.vy = 0;
-    player.energy = ENERGY_MAX;
-    player.alive = true;
-    player.lastThreatBy = undefined;
-    player.controlSuppression = 0;
-    player.aiConserveEnergy = false;
-  }
-}
-
-function edgeDanger(player: ServerPlayer): number {
-  const margin = 170;
-  const left = clamp((margin - player.x) / margin, 0, 1);
-  const right = clamp((player.x - (arena.width - margin)) / margin, 0, 1);
-  const top = clamp((margin - player.y) / margin, 0, 1);
-  const bottom = clamp((player.y - (arena.height - margin)) / margin, 0, 1);
-  return left + right + top + bottom;
+  return best;
 }
 
 function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
@@ -382,10 +349,9 @@ function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
   };
 }
 
-function hazardRepulsion(player: ServerPlayer): { x: number; y: number; danger: number } {
+function hazardRepulsion(player: ServerPlayer): { x: number; y: number } {
   let sumX = 0;
   let sumY = 0;
-  let danger = 0;
 
   for (const hazard of arena.hazards) {
     const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
@@ -393,7 +359,7 @@ function hazardRepulsion(player: ServerPlayer): { x: number; y: number; danger: 
     const dx = player.x - nearestX;
     const dy = player.y - nearestY;
     const distance = Math.hypot(dx, dy);
-    const avoidRange = 130;
+    const avoidRange = 140;
 
     if (distance >= avoidRange || distance < 0.0001) {
       continue;
@@ -404,84 +370,168 @@ function hazardRepulsion(player: ServerPlayer): { x: number; y: number; danger: 
     const weight = push * push;
     sumX += n.x * weight;
     sumY += n.y * weight;
-    danger += weight;
   }
 
-  return { x: sumX, y: sumY, danger };
+  return { x: sumX, y: sumY };
 }
 
-function isInHazard(player: ServerPlayer): boolean {
-  return arena.hazards.some((hazard) => {
-    return (
-      player.x + player.radius > hazard.x &&
-      player.x - player.radius < hazard.x + hazard.width &&
-      player.y + player.radius > hazard.y &&
-      player.y - player.radius < hazard.y + hazard.height
-    );
-  });
+function canPush(source: ServerPlayer, target: ServerPlayer): boolean {
+  if (source.id === target.id || !source.alive || !target.alive) {
+    return false;
+  }
+  return source.mass / Math.max(1, target.mass) >= PUSH_MIN_MASS_RATIO;
 }
 
-function hazardCenter(hazard: ArenaState["hazards"][number]): { x: number; y: number } {
-  return {
-    x: hazard.x + hazard.width / 2,
-    y: hazard.y + hazard.height / 2,
-  };
+function knockOut(victim: ServerPlayer, actorId?: string): void {
+  if (!victim.alive) {
+    return;
+  }
+
+  victim.alive = false;
+  victim.vx = 0;
+  victim.vy = 0;
+  victim.charge = 0;
+  victim.lastChargePressed = false;
+  victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
+
+  applyMass(victim, -Math.max(2, victim.mass * 0.18));
+
+  const scorerId = actorId ?? victim.lastThreatBy;
+  if (scorerId && scorerId !== victim.id) {
+    const scorer = players.get(scorerId);
+    if (scorer) {
+      scorer.score += KILL_SCORE_BONUS;
+      applyMass(scorer, KILL_MASS_BONUS + victim.mass * 0.05);
+    }
+  }
 }
 
-function hazardPressureAt(x: number, y: number): number {
-  // Liefert einen Wert von 0..1+, wie "gefaehrlich" diese Position ist.
-  let pressure = 0;
-  for (const hazard of arena.hazards) {
-    const nearestX = clamp(x, hazard.x, hazard.x + hazard.width);
-    const nearestY = clamp(y, hazard.y, hazard.y + hazard.height);
-    const distance = Math.hypot(x - nearestX, y - nearestY);
-    if (distance >= AI_HAZARD_INTEREST_RANGE) {
+function handleRespawns(now: number): void {
+  for (const player of players.values()) {
+    if (player.alive || now < player.respawnAt) {
       continue;
     }
-    const influence = 1 - distance / AI_HAZARD_INTEREST_RANGE;
-    pressure += influence * influence;
+
+    const spawn = randomSpawn();
+    player.x = spawn.x;
+    player.y = spawn.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.alive = true;
+    player.charge = 0;
+    player.lastThreatBy = undefined;
+    player.lastChargePressed = false;
   }
-  return pressure;
 }
 
-function chooseTrapHazard(bot: ServerPlayer, target: ServerPlayer) {
-  let best:
-    | {
-        hazard: ArenaState["hazards"][number];
-        centerX: number;
-        centerY: number;
-        score: number;
+function spawnOrb(now: number): void {
+  if (pickups.size >= ORB_MAX_COUNT || now - lastOrbSpawnAt < ORB_SPAWN_INTERVAL_MS) {
+    return;
+  }
+
+  let spawn = randomSpawn();
+  let safety = 0;
+  while (isPointInHazard(spawn.x, spawn.y) && safety < 20) {
+    spawn = randomSpawn();
+    safety += 1;
+  }
+
+  const id = `orb-${orbCounter++}`;
+  pickups.set(id, {
+    id,
+    x: spawn.x,
+    y: spawn.y,
+    radius: ORB_RADIUS,
+    value: ORB_VALUE_MIN + Math.floor(Math.random() * (ORB_VALUE_MAX - ORB_VALUE_MIN + 1)),
+  });
+  lastOrbSpawnAt = now;
+}
+
+function collectOrbs(playersList: ServerPlayer[]): void {
+  for (const player of playersList) {
+    for (const [orbId, orb] of pickups) {
+      const dx = player.x - orb.x;
+      const dy = player.y - orb.y;
+      const pickupDistance = player.radius + orb.radius;
+      if (Math.abs(dx) > pickupDistance || Math.abs(dy) > pickupDistance) {
+        continue;
       }
-    | undefined;
+      if (dx * dx + dy * dy > pickupDistance * pickupDistance) {
+        continue;
+      }
 
-  for (const hazard of arena.hazards) {
-    const center = hazardCenter(hazard);
-    const distTargetToHazard = Math.hypot(target.x - center.x, target.y - center.y);
-    const distBotToHazard = Math.hypot(bot.x - center.x, bot.y - center.y);
+      const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
+      applyMass(player, orb.value * catchUpBonus);
+      player.score += Math.max(1, Math.round(orb.value * 1.4));
+      pickups.delete(orbId);
+    }
+  }
+}
 
-    // Ziel nahe am Hazard = gute Kill-Chance.
-    const targetFactor = clamp((AI_HAZARD_INTEREST_RANGE - distTargetToHazard) / AI_HAZARD_INTEREST_RANGE, 0, 1);
-    const botFactor = clamp((460 - distBotToHazard) / 460, 0, 1);
-    const score = targetFactor * 0.78 + botFactor * 0.22;
+function findPushTarget(source: ServerPlayer, candidates: ServerPlayer[]): ServerPlayer | undefined {
+  const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
+  if (aim.length < 0.0001) {
+    return undefined;
+  }
 
-    if (!best || score > best.score) {
-      best = {
-        hazard,
-        centerX: center.x,
-        centerY: center.y,
-        score,
-      };
+  let bestScore = 0;
+  let bestTarget: ServerPlayer | undefined;
+
+  for (const target of candidates) {
+    if (!canPush(source, target)) {
+      continue;
+    }
+
+    const dir = normalize(target.x - source.x, target.y - source.y);
+    const cone = dir.x * aim.x + dir.y * aim.y;
+    if (cone < 0.55) {
+      continue;
+    }
+
+    const distanceCap = PUSH_RANGE + source.radius + target.radius;
+    if (dir.length > distanceCap) {
+      continue;
+    }
+
+    const distanceWeight = 1 - dir.length / distanceCap;
+    const score = cone * 0.65 + distanceWeight * 0.35;
+    if (!bestTarget || score > bestScore) {
+      bestScore = score;
+      bestTarget = target;
     }
   }
 
-  if (!best || best.score < 0.14) {
-    return undefined;
+  return bestTarget;
+}
+
+function executePush(source: ServerPlayer, releasedCharge: number, candidates: ServerPlayer[]): void {
+  if (releasedCharge < PUSH_CHARGE_MIN) {
+    return;
   }
-  return best;
+
+  const target = findPushTarget(source, candidates);
+  if (!target) {
+    return;
+  }
+
+  const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
+  const massAdvantage = Math.pow(clamp(source.mass / Math.max(1, target.mass), 1, 3), 0.35);
+  const chargeRatio = clamp(releasedCharge / CHARGE_MAX, 0, 1);
+  const deltaV = PUSH_FORCE_BASE * (0.6 + chargeRatio * 1.1) * massAdvantage;
+
+  target.vx += aim.x * deltaV;
+  target.vy += aim.y * deltaV;
+
+  const recoil = deltaV * PUSH_RECOIL_FACTOR * clamp(target.mass / Math.max(1, source.mass), 0.3, 1.3);
+  source.vx -= aim.x * recoil;
+  source.vy -= aim.y * recoil;
+
+  target.lastThreatBy = source.id;
 }
 
 function runAi(now: number): void {
   const list = Array.from(players.values());
+  const orbs = Array.from(pickups.values());
   const arenaCenter = { x: arena.width / 2, y: arena.height / 2 };
 
   for (const bot of list) {
@@ -489,156 +539,129 @@ function runAi(now: number): void {
       continue;
     }
 
-    // Energie-Hysterese: Der Bot wechselt in den Sparmodus wenn Energie niedrig ist,
-    // und verlaesst ihn erst wieder bei deutlich hoeherem Wert.
-    // Dadurch wird ein staendiges Ein/Aus um einen Grenzwert verhindert.
-    if (bot.energy <= AI_ENERGY_SAVE_THRESHOLD) {
-      bot.aiConserveEnergy = true;
-    } else if (bot.energy >= AI_ENERGY_REENGAGE_THRESHOLD) {
-      bot.aiConserveEnergy = false;
-    }
-
     if (now >= bot.aiDecisionAt) {
-      const options = list.filter((item) => item.id !== bot.id && item.alive);
-      if (options.length > 0) {
-        options.sort((a, b) => {
-          const distA = Math.hypot(a.x - bot.x, a.y - bot.y);
-          const distB = Math.hypot(b.x - bot.x, b.y - bot.y);
-          const aEdge = edgeDanger(a) * 95;
-          const bEdge = edgeDanger(b) * 95;
-          const aHazard = hazardPressureAt(a.x, a.y) * 180;
-          const bHazard = hazardPressureAt(b.x, b.y) * 180;
-          const aCrowd = list.filter((p) => p.isBot && p.aiTargetId === a.id).length * 140;
-          const bCrowd = list.filter((p) => p.isBot && p.aiTargetId === b.id).length * 140;
-          const scorePriority = (b.score - a.score) * 20;
-          return distA + aEdge + aCrowd - aHazard - (distB + bEdge + bCrowd - bHazard) + scorePriority;
-        });
-
-        const spreadPool = Math.min(3, options.length);
-        const spreadIndex = Math.floor(Math.random() * spreadPool);
-        bot.aiTargetId = options[spreadIndex]?.id;
+      let targetPlayer: ServerPlayer | undefined;
+      let targetPlayerDistance = Number.POSITIVE_INFINITY;
+      for (const candidate of list) {
+        if (candidate.id === bot.id || !candidate.alive || !canPush(bot, candidate)) {
+          continue;
+        }
+        const distance = Math.hypot(candidate.x - bot.x, candidate.y - bot.y);
+        if (distance < targetPlayerDistance) {
+          targetPlayerDistance = distance;
+          targetPlayer = candidate;
+        }
       }
+
+      let targetOrb: ForceOrb | undefined;
+      let targetOrbDistance = Number.POSITIVE_INFINITY;
+      for (const orb of orbs) {
+        const distance = Math.hypot(orb.x - bot.x, orb.y - bot.y);
+        if (distance < targetOrbDistance) {
+          targetOrbDistance = distance;
+          targetOrb = orb;
+        }
+      }
+
+      const shouldFarm = bot.mass < 25 || (!targetPlayer && Boolean(targetOrb));
+
+      if (shouldFarm && targetOrb) {
+        bot.aiTargetKind = "orb";
+        bot.aiTargetId = targetOrb.id;
+      } else if (targetPlayer) {
+        bot.aiTargetKind = "player";
+        bot.aiTargetId = targetPlayer.id;
+      } else if (targetOrb) {
+        bot.aiTargetKind = "orb";
+        bot.aiTargetId = targetOrb.id;
+      } else {
+        bot.aiTargetId = undefined;
+        bot.aiTargetKind = undefined;
+      }
+
       bot.aiDecisionAt = now + AI_TARGET_RETHINK_BASE_MS + Math.random() * AI_TARGET_RETHINK_RANDOM_MS;
     }
 
-    const target = bot.aiTargetId ? players.get(bot.aiTargetId) : undefined;
-    if (!target || !target.alive) {
-      bot.lastInput = {
-        ...bot.lastInput,
-        up: false,
-        down: false,
-        left: false,
-        right: false,
-        push: false,
-        pull: false,
-      };
-      continue;
+    let targetX = arenaCenter.x;
+    let targetY = arenaCenter.y;
+    let charge = false;
+
+    if (bot.aiTargetKind === "player" && bot.aiTargetId) {
+      const target = players.get(bot.aiTargetId);
+      if (target && target.alive) {
+        const hazard = nearestHazardCenter(target);
+        const hazardDir = normalize(hazard.x - target.x, hazard.y - target.y);
+        const trapPoint = {
+          x: target.x - hazardDir.x * 105,
+          y: target.y - hazardDir.y * 105,
+        };
+
+        targetX = trapPoint.x;
+        targetY = trapPoint.y;
+
+        const toTarget = normalize(target.x - bot.x, target.y - bot.y);
+        const toHazard = normalize(hazard.x - target.x, hazard.y - target.y);
+        const alignment = clamp(toTarget.x * toHazard.x + toTarget.y * toHazard.y, -1, 1);
+        const distance = Math.hypot(target.x - bot.x, target.y - bot.y);
+
+        bot.lastInput.aimX = target.x;
+        bot.lastInput.aimY = target.y;
+
+        if (canPush(bot, target)) {
+          if (bot.charge < 62 || distance > 195) {
+            charge = true;
+          } else if (alignment > 0.8 && distance < 210) {
+            charge = false;
+          } else {
+            charge = true;
+          }
+        }
+      }
+    } else if (bot.aiTargetKind === "orb" && bot.aiTargetId) {
+      const orb = pickups.get(bot.aiTargetId);
+      if (orb) {
+        targetX = orb.x;
+        targetY = orb.y;
+        bot.lastInput.aimX = orb.x;
+        bot.lastInput.aimY = orb.y;
+      }
     }
 
-    const dx = target.x - bot.x;
-    const dy = target.y - bot.y;
-    const distance = Math.hypot(dx, dy);
-
-    const toTarget = normalize(dx, dy);
-    const toCenter = normalize(arenaCenter.x - bot.x, arenaCenter.y - bot.y);
+    const toTarget = normalize(targetX - bot.x, targetY - bot.y);
     const edgeAvoid = edgeRepulsion(bot);
     const hazardAvoid = hazardRepulsion(bot);
-    const trap = chooseTrapHazard(bot, target);
 
-    // Trap-Position: Bot geht auf die Gegenseite des Ziels, um in Richtung Hazard zu pushen.
-    let trapX = 0;
-    let trapY = 0;
-    if (trap) {
-      const fromTargetToHazard = normalize(trap.centerX - target.x, trap.centerY - target.y);
-      trapX = target.x - fromTargetToHazard.x * AI_HAZARD_TRAP_DISTANCE;
-      trapY = target.y - fromTargetToHazard.y * AI_HAZARD_TRAP_DISTANCE;
-    }
-
-    const toTrap = trap ? normalize(trapX - bot.x, trapY - bot.y) : { x: 0, y: 0, length: 0 };
     let separationX = 0;
     let separationY = 0;
-
     for (const other of list) {
       if (other.id === bot.id || !other.alive) {
         continue;
       }
-
       const ox = bot.x - other.x;
       const oy = bot.y - other.y;
       const distance = Math.hypot(ox, oy);
       if (distance < 0.01 || distance > AI_SEPARATION_RADIUS) {
         continue;
       }
-
       const away = 1 - distance / AI_SEPARATION_RADIUS;
       const dir = normalize(ox, oy);
-      const botWeight = other.isBot ? 1.35 : 0.85;
-      separationX += dir.x * away * away * botWeight;
-      separationY += dir.y * away * away * botWeight;
+      separationX += dir.x * away * away * (other.isBot ? 1.2 : 0.8);
+      separationY += dir.y * away * away * (other.isBot ? 1.2 : 0.8);
     }
 
-    const hazardAvoidWeight = trap ? 1.05 : 2.75;
-    const targetWeight = trap ? 0.7 : 1.05;
-    const trapWeight = trap ? 1.8 : 0;
-
-    const desiredX =
-      toTarget.x * targetWeight +
-      toTrap.x * trapWeight +
-      edgeAvoid.x * 2.35 +
-      hazardAvoid.x * hazardAvoidWeight +
-      toCenter.x * 0.35 +
-      separationX * 2.7;
-    const desiredY =
-      toTarget.y * targetWeight +
-      toTrap.y * trapWeight +
-      edgeAvoid.y * 2.35 +
-      hazardAvoid.y * hazardAvoidWeight +
-      toCenter.y * 0.35 +
-      separationY * 2.7;
-    const desiredMove = normalize(desiredX, desiredY);
-
-    const avoidDanger = edgeDanger(bot) + hazardAvoid.danger;
-    const panic = avoidDanger > 0.55;
-
-    // Bei kritischer Energie priorisiert der Bot nur Sicherheit und Regeneration.
-    // Er bewegt sich weg von Kanten/Gefahren und nutzt in dieser Phase keinen Magnet.
-    const criticalEnergy = bot.energy <= AI_ENERGY_CRITICAL_THRESHOLD;
-    let finalMove = desiredMove;
-    if (criticalEnergy) {
-      const safeX = edgeAvoid.x * 3.2 + hazardAvoid.x * 3.4 + toCenter.x * 0.8 + separationX * 2.2;
-      const safeY = edgeAvoid.y * 3.2 + hazardAvoid.y * 3.4 + toCenter.y * 0.8 + separationY * 2.2;
-      finalMove = normalize(safeX, safeY);
-    }
-
-    // Push nur wenn Bot, Ziel und Hazard gut ausgerichtet sind.
-    const targetToHazard = trap
-      ? normalize(trap.centerX - target.x, trap.centerY - target.y)
-      : { x: 0, y: 0, length: 0 };
-    const alignment = trap
-      ? clamp(toTarget.x * targetToHazard.x + toTarget.y * targetToHazard.y, -1, 1)
-      : 0;
-    const canExecuteTrapPush = Boolean(
-      trap && distance < 260 && alignment >= AI_PUSH_ALIGNMENT_THRESHOLD
-    );
-    const shouldPullToSetTrap = Boolean(trap && !canExecuteTrapPush && distance > 160 && distance < 320);
-
-    // Magnet-Nutzung wird im Sparmodus streng begrenzt:
-    // - kein Dauerspammen bei leerem Tank
-    // - nur bei sicherem Vorteil (Trap-Push) noch erlaubt
-    const conserveEnergy = bot.aiConserveEnergy || criticalEnergy;
-    const allowPush = !conserveEnergy || canExecuteTrapPush;
-    const allowPull = !conserveEnergy;
+    const desiredX = toTarget.x * 1.2 + edgeAvoid.x * 2.4 + hazardAvoid.x * 2.6 + separationX * 2.5;
+    const desiredY = toTarget.y * 1.2 + edgeAvoid.y * 2.4 + hazardAvoid.y * 2.6 + separationY * 2.5;
+    const move = normalize(desiredX, desiredY);
 
     bot.lastInput = {
       ...bot.lastInput,
-      up: finalMove.y < -0.2,
-      down: finalMove.y > 0.2,
-      left: finalMove.x < -0.2,
-      right: finalMove.x > 0.2,
-      push: allowPush && !panic && (canExecuteTrapPush || distance < 170),
-      pull: allowPull && (panic ? distance < 210 : shouldPullToSetTrap),
-      aimX: trap ? trap.centerX : target.x,
-      aimY: trap ? trap.centerY : target.y,
+      up: move.y < -0.2,
+      down: move.y > 0.2,
+      left: move.x < -0.2,
+      right: move.x > 0.2,
+      charge,
+      aimX: bot.lastInput.aimX || targetX,
+      aimY: bot.lastInput.aimY || targetY,
     };
   }
 }
@@ -667,18 +690,13 @@ function tickSimulation(): void {
   const now = Date.now();
 
   maintainBots();
+  spawnOrb(now);
   runAi(now);
   handleRespawns(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);
 
   for (const player of activePlayers) {
-    player.controlSuppression = clamp(
-      player.controlSuppression - CONTROL_SUPPRESSION_RECOVERY * DT,
-      0,
-      1
-    );
-
     const input = player.lastInput;
     let inputX = 0;
     let inputY = 0;
@@ -688,118 +706,46 @@ function tickSimulation(): void {
     if (input.down) inputY += 1;
 
     const direction = normalize(inputX, inputY);
-    const exhaustion = clamp(
-      (MOVEMENT_EXHAUST_THRESHOLD - player.energy) / MOVEMENT_EXHAUST_THRESHOLD,
-      0,
-      1
-    );
-    const accelerationMultiplier =
-      1 - exhaustion * 0.35 - clamp(player.controlSuppression, 0, 1) * 0.2;
-    const effectiveAcceleration = PLAYER_ACCELERATION * Math.max(0.5, accelerationMultiplier);
+    const acceleration = accelerationForMass(player.mass);
+    const maxSpeed = maxSpeedForMass(player.mass);
 
-    player.vx += direction.x * effectiveAcceleration * DT;
-    player.vy += direction.y * effectiveAcceleration * DT;
+    player.vx += direction.x * acceleration * DT;
+    player.vy += direction.y * acceleration * DT;
 
-    const effectiveDrag = clamp(PLAYER_DRAG - exhaustion * 0.09, 0.72, 0.92);
-    player.vx *= effectiveDrag;
-    player.vy *= effectiveDrag;
+    player.vx *= PLAYER_DRAG;
+    player.vy *= PLAYER_DRAG;
 
     const speed = Math.hypot(player.vx, player.vy);
-    const exhaustedSpeedMultiplier = 1 - exhaustion * 0.25;
-    const effectiveMaxSpeed = PLAYER_MAX_SPEED * Math.max(0.72, exhaustedSpeedMultiplier);
-    if (speed > effectiveMaxSpeed) {
-      const scaled = effectiveMaxSpeed / speed;
+    if (speed > maxSpeed) {
+      const scaled = maxSpeed / speed;
       player.vx *= scaled;
       player.vy *= scaled;
     }
+
+    const isCharging = Boolean(input.charge);
+    const releasedCharge = !isCharging && player.lastChargePressed ? player.charge : 0;
+
+    if (isCharging) {
+      player.charge = clamp(player.charge + CHARGE_GAIN_RATE * DT, 0, CHARGE_MAX);
+    } else {
+      player.charge = clamp(player.charge - CHARGE_DECAY_RATE * DT, 0, CHARGE_MAX);
+    }
+
+    if (releasedCharge >= PUSH_CHARGE_MIN) {
+      executePush(player, releasedCharge, activePlayers);
+      player.charge = 0;
+    }
+
+    player.lastChargePressed = isCharging;
   }
 
-  for (const source of activePlayers) {
-    const wantsPush = source.lastInput.push;
-    const wantsPull = source.lastInput.pull;
-    const action = wantsPush ? "push" : wantsPull ? "pull" : undefined;
-    if (!action) {
-      continue;
-    }
-
-    const mode = magnetModeMultiplier(source.mode, action);
-    const currentRange = MAGNET_RANGE * mode.range;
-    const energyCost = MAGNET_ENERGY_DRAIN * mode.energy * DT;
-
-    if (source.energy < energyCost) {
-      continue;
-    }
-
-    source.energy = clamp(source.energy - energyCost, 0, ENERGY_MAX);
-    const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
-
-    for (const target of activePlayers) {
-      if (target.id === source.id) {
-        continue;
-      }
-
-      const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const direction = normalize(dx, dy);
-      if (direction.length > currentRange || direction.length < 0.01) {
-        continue;
-      }
-
-      const directionalWeight = Math.max(0, direction.x * aim.x + direction.y * aim.y);
-      const aoeBonus = source.mode === "aoe" ? 0.45 : 0;
-      const influence = clamp(directionalWeight + aoeBonus, 0, 1);
-      if (influence <= 0.05) {
-        continue;
-      }
-
-      const falloff = 1 - direction.length / currentRange;
-      const baseForce = MAGNET_POWER * mode.power * falloff * falloff * influence;
-      const signedForce = action === "push" ? baseForce : -baseForce;
-
-      target.vx += direction.x * signedForce * DT;
-      target.vy += direction.y * signedForce * DT;
-      target.vx *= MAGNET_SPEED_DAMPING;
-      target.vy *= MAGNET_SPEED_DAMPING;
-      target.controlSuppression = clamp(
-        target.controlSuppression + CONTROL_SUPPRESSION_ON_HIT * influence,
-        0,
-        1
-      );
-      target.lastThreatBy = source.id;
-
-      if (source.mode === "sticky" && action === "pull") {
-        target.vx *= 0.96;
-        target.vy *= 0.96;
-        target.controlSuppression = clamp(target.controlSuppression + 0.14, 0, 1);
-      }
-    }
-  }
-
-  for (const player of activePlayers) {
-    const input = player.lastInput;
-    const isMoving = input.up || input.down || input.left || input.right;
-    const isUsingMagnet = input.push || input.pull;
-
-    let energyDelta = ENERGY_REGEN * DT;
-    if (isMoving) {
-      energyDelta -= MOVEMENT_ENERGY_DRAIN * DT;
-    }
-    if (isUsingMagnet) {
-      energyDelta -= 4 * DT;
-    }
-    player.energy = clamp(player.energy + energyDelta, 0, ENERGY_MAX);
-  }
+  collectOrbs(activePlayers);
 
   for (const player of activePlayers) {
     player.x += player.vx * DT;
     player.y += player.vy * DT;
 
-    if (
-      player.x < -60 ||
-      player.x > arena.width + 60 ||
-      player.y < -60 ||
-      player.y > arena.height + 60
-    ) {
+    if (player.x < -60 || player.x > arena.width + 60 || player.y < -60 || player.y > arena.height + 60) {
       knockOut(player);
       continue;
     }
@@ -830,7 +776,6 @@ io.on("connection", (socket) => {
 
   const player = createPlayer(socket.id, requestedName, false);
   players.set(player.id, player);
-  socketsByPlayer.set(player.id, socket.id);
   maintainBots();
 
   socket.emit("welcome", {
@@ -849,7 +794,6 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[Server] Player disconnected: id=${socket.id}`);
     players.delete(player.id);
-    socketsByPlayer.delete(player.id);
     io.emit("playerLeft", { id: player.id });
     maintainBots();
   });

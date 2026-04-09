@@ -1,10 +1,3 @@
-export type MagnetMode =
-  | "balanced"
-  | "strong-push"
-  | "long-pull"
-  | "aoe"
-  | "sticky";
-
 export type HazardType = "pit" | "lava" | "electric";
 
 export interface Vec2 {
@@ -27,6 +20,14 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
+export interface ForceOrb {
+  id: string;
+  x: number;
+  y: number;
+  value: number;
+  radius: number;
+}
+
 export interface PlayerSnapshot {
   id: string;
   name: string;
@@ -36,8 +37,9 @@ export interface PlayerSnapshot {
   vy: number;
   radius: number;
   color: number;
-  energy: number;
-  mode: MagnetMode;
+  mass: number;
+  charge: number;
+  chargeMax: number;
   score: number;
   isBot: boolean;
   alive: boolean;
@@ -48,6 +50,7 @@ export interface GameSnapshot {
   serverTime: number;
   arena: ArenaState;
   players: PlayerSnapshot[];
+  pickups: ForceOrb[];
 }
 
 export interface WelcomePayload {
@@ -65,8 +68,7 @@ export interface PlayerInputPayload {
   down: boolean;
   left: boolean;
   right: boolean;
-  push: boolean;
-  pull: boolean;
+  charge: boolean;
   aimX: number;
   aimY: number;
 }

@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { io, type Socket } from "socket.io-client";
 import type {
   ClientToServerEvents,
+  ForceOrb,
   GameSnapshot,
   HazardZone,
   PlayerInputPayload,
@@ -11,8 +12,24 @@ import type {
 
 // In Produktion verwenden wir standardmaessig dieselbe Origin wie die Seite selbst.
 // Optional kann die URL fuer Sonderfaelle ueber VITE_SERVER_URL gesetzt werden.
-const SERVER_URL =
-  (import.meta.env.VITE_SERVER_URL as string | undefined) ?? window.location.origin;
+function resolveServerUrl(): string {
+  const configured = import.meta.env.VITE_SERVER_URL as string | undefined;
+  if (configured && configured.trim().length > 0) {
+    return configured;
+  }
+
+  const { protocol, hostname, port } = window.location;
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+
+  // Dev-Fallback: Vite laeuft meist auf 5173/8080, Backend auf 3000.
+  if (isLocalHost && port !== "3000") {
+    return `${protocol}//${hostname}:3000`;
+  }
+
+  return window.location.origin;
+}
+
+const SERVER_URL = resolveServerUrl();
 
 const nameOverlay = document.getElementById("name-overlay") as HTMLDivElement | null;
 const nameInput = document.getElementById("name-input") as HTMLInputElement | null;
@@ -51,8 +68,12 @@ function startGameWithName(): void {
   startButtonElement.disabled = true;
 
   socket.auth = { playerName: normalizedName };
-  socket.connect();
+  if (!socket.connected) {
+    socket.connect();
+  }
 }
+
+nameInputElement.focus();
 
 startButtonElement.addEventListener("click", startGameWithName);
 nameInputElement.addEventListener("keydown", (event) => {
@@ -74,6 +95,14 @@ socket.on("disconnect", () => {
   console.log("[Client] Disconnected from server.");
 });
 
+socket.on("connect_error", (error) => {
+  startButtonElement.disabled = false;
+  nameOverlayElement.classList.remove("hidden");
+  nameErrorElement.textContent = `Verbindung fehlgeschlagen: ${error.message}`;
+  nameInputElement.focus();
+  console.error("[Client] Connection error:", error.message);
+});
+
 class GameScene extends Phaser.Scene {
   private hudPanel!: Phaser.GameObjects.Graphics;
   private statusText!: Phaser.GameObjects.Text;
@@ -84,19 +113,18 @@ class GameScene extends Phaser.Scene {
   private arenaGraphics!: Phaser.GameObjects.Graphics;
   private hazardGraphics!: Phaser.GameObjects.Graphics;
   private decorGraphics!: Phaser.GameObjects.Graphics;
+  private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
   private aimLine!: Phaser.GameObjects.Graphics;
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
+  private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
 
   private snapshot: GameSnapshot | null = null;
   private localPlayerId = "";
   private inputSeq = 0;
-  private smoothedDeltaMs = 16.67;
-  private hazardFrameCounter = 0;
-  private hazardFrameSkip = 1;
-  private hazardDetailLevel: "high" | "medium" | "low" = "high";
   private lastInputSentAt = 0;
+  private hudCompact = false;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -106,11 +134,11 @@ class GameScene extends Phaser.Scene {
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
-  private pushPressed = false;
-  private pullPressed = false;
+  private chargePressed = false;
 
   private readonly onConnect: () => void;
   private readonly onDisconnect: () => void;
+  private readonly onConnectError: (error: Error) => void;
   private readonly onWelcome: (payload: {
     yourId: string;
     snapshot: GameSnapshot;
@@ -125,21 +153,27 @@ class GameScene extends Phaser.Scene {
       this.updateStatus();
       this.aimLine.clear();
     };
+    this.onConnectError = () => {
+      this.updateStatus();
+    };
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
       this.snapshot = payload.snapshot;
+      this.syncRenderPlayersFromSnapshot(true);
       this.resizeToArena();
       this.updateStatus();
       this.drawArena();
-      this.drawHazards(this.time.now / 1000);
+      this.drawHazards();
+      this.drawPickups();
       this.drawPlayers();
       this.updateHud();
     };
     this.onSnapshot = (payload) => {
       this.snapshot = payload;
+      this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
-      this.drawHazards(this.time.now / 1000);
-      this.drawPlayers();
+      this.drawHazards();
+      this.drawPickups();
       this.updateHud();
     };
     this.onPlayerLeft = () => {
@@ -155,6 +189,7 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics = this.add.graphics();
     this.hazardGraphics = this.add.graphics();
     this.decorGraphics = this.add.graphics();
+    this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
     this.aimLine = this.add.graphics();
 
@@ -192,7 +227,7 @@ class GameScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     this.controlsText = this.add
-      .text(0, 0, "W A S D  → Bewegung\nMaus      → Zielen\nLMB       → Push\nRMB       → Pull\nLow Energy = langsamer", {
+      .text(0, 0, "W A S D  → Bewegung\nMaus      → Zielen\nLMB halten → Kraft laden\nLMB loslassen → Schubstoß\nSammle Orbs für mehr Masse", {
         fontSize: "13px",
         color: "#cbd5e1",
         lineSpacing: 4,
@@ -208,11 +243,13 @@ class GameScene extends Phaser.Scene {
       throw new Error("Keyboard input is not available.");
     }
     this.keys = {
-      up: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+      up: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W, false),
+      down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S, false),
+      left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A, false),
+      right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
     };
+    // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
+    keyboard.disableGlobalCapture();
 
     this.input.mouse?.disableContextMenu();
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
@@ -221,24 +258,19 @@ class GameScene extends Phaser.Scene {
     });
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 0) {
-        this.pushPressed = true;
-      }
-      if (pointer.button === 2) {
-        this.pullPressed = true;
+        this.chargePressed = true;
       }
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 0) {
-        this.pushPressed = false;
-      }
-      if (pointer.button === 2) {
-        this.pullPressed = false;
+        this.chargePressed = false;
       }
     });
 
     this.scale.on("resize", () => {
       this.layoutHud();
       this.renderHudPanel();
+      this.updateHud();
     });
     window.addEventListener("resize", this.handleWindowResize);
 
@@ -246,6 +278,7 @@ class GameScene extends Phaser.Scene {
 
     socket.on("connect", this.onConnect);
     socket.on("disconnect", this.onDisconnect);
+    socket.on("connect_error", this.onConnectError);
     socket.on("welcome", this.onWelcome);
     socket.on("snapshot", this.onSnapshot);
     socket.on("playerLeft", this.onPlayerLeft);
@@ -254,16 +287,6 @@ class GameScene extends Phaser.Scene {
   update(): void {
     if (!socket.connected) {
       return;
-    }
-
-    this.updatePerformanceProfile();
-
-    // Animierte Gefahren laufen dauerhaft mit, auch wenn sich Snapshot-Daten nicht aendern.
-    if (this.snapshot) {
-      this.hazardFrameCounter += 1;
-      if (this.hazardFrameCounter % this.hazardFrameSkip === 0) {
-        this.drawHazards(this.time.now / 1000);
-      }
     }
 
     const player = this.getLocalPlayer();
@@ -277,8 +300,7 @@ class GameScene extends Phaser.Scene {
       down: this.keys.down.isDown,
       left: this.keys.left.isDown,
       right: this.keys.right.isDown,
-      push: this.pushPressed,
-      pull: this.pullPressed,
+      charge: this.chargePressed,
       aimX: this.pointerWorld.x || player.x,
       aimY: this.pointerWorld.y || player.y,
     };
@@ -287,27 +309,68 @@ class GameScene extends Phaser.Scene {
       socket.emit("input", payload);
       this.lastInputSentAt = this.time.now;
     }
+
+    this.updateRenderPlayers();
+    this.drawPlayers();
     this.drawAim(player, payload);
   }
 
-  private updatePerformanceProfile(): void {
-    const delta = this.game.loop.delta;
-    this.smoothedDeltaMs = Phaser.Math.Linear(this.smoothedDeltaMs, delta, 0.08);
-
-    if (this.smoothedDeltaMs > 28) {
-      this.hazardDetailLevel = "low";
-      this.hazardFrameSkip = 3;
+  private syncRenderPlayersFromSnapshot(force: boolean): void {
+    if (!this.snapshot) {
       return;
     }
 
-    if (this.smoothedDeltaMs > 20) {
-      this.hazardDetailLevel = "medium";
-      this.hazardFrameSkip = 2;
+    const aliveIds = new Set<string>();
+    for (const player of this.snapshot.players) {
+      if (!player.alive) {
+        continue;
+      }
+      aliveIds.add(player.id);
+      const existing = this.renderPlayers.get(player.id);
+      if (!existing || force) {
+        this.renderPlayers.set(player.id, {
+          x: player.x,
+          y: player.y,
+          vx: player.vx,
+          vy: player.vy,
+        });
+      }
+    }
+
+    for (const id of Array.from(this.renderPlayers.keys())) {
+      if (!aliveIds.has(id)) {
+        this.renderPlayers.delete(id);
+      }
+    }
+  }
+
+  private updateRenderPlayers(): void {
+    if (!this.snapshot) {
       return;
     }
 
-    this.hazardDetailLevel = "high";
-    this.hazardFrameSkip = 1;
+    for (const player of this.snapshot.players) {
+      if (!player.alive) {
+        continue;
+      }
+
+      const state = this.renderPlayers.get(player.id);
+      if (!state) {
+        this.renderPlayers.set(player.id, {
+          x: player.x,
+          y: player.y,
+          vx: player.vx,
+          vy: player.vy,
+        });
+        continue;
+      }
+
+      // Weiches Nachziehen auf Serverposition statt hartem Snappen.
+      state.x = Phaser.Math.Linear(state.x, player.x, 0.32);
+      state.y = Phaser.Math.Linear(state.y, player.y, 0.32);
+      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.3);
+      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.3);
+    }
   }
 
   private resizeToArena(): void {
@@ -343,20 +406,23 @@ class GameScene extends Phaser.Scene {
   }
 
   private layoutHud(): void {
-    const panelWidth = 360;
-    const panelX = this.scale.width - panelWidth - 18;
+    const { panelX } = this.getHudLayout();
 
     this.statusText.setPosition(panelX + 16, 16);
     this.hudText.setPosition(panelX + 16, 40);
     this.scoreText.setPosition(panelX + 16, 72);
-    this.controlsTitle.setPosition(panelX + 16, 178);
-    this.controlsText.setPosition(panelX + 16, 200);
+    if (this.hudCompact) {
+      this.controlsTitle.setPosition(panelX + 16, 154);
+      this.controlsText.setPosition(panelX + 16, 174);
+    } else {
+      this.controlsTitle.setPosition(panelX + 16, 178);
+      this.controlsText.setPosition(panelX + 16, 200);
+    }
   }
 
   private renderHudPanel(): void {
-    const panelWidth = 360;
-    const panelHeight = 320;
-    const panelX = this.scale.width - panelWidth - 18;
+    const { panelWidth, panelX, panelHeight, compact } = this.getHudLayout();
+    this.hudCompact = compact;
     const panelY = 10;
 
     this.hudPanel.clear();
@@ -366,7 +432,21 @@ class GameScene extends Phaser.Scene {
     this.hudPanel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
     this.hudPanel.lineStyle(1, 0x94a3b8, 0.2);
     this.hudPanel.lineBetween(panelX + 14, 62, panelX + panelWidth - 14, 62);
-    this.hudPanel.lineBetween(panelX + 14, 168, panelX + panelWidth - 14, 168);
+    this.hudPanel.lineBetween(panelX + 14, compact ? 146 : 168, panelX + panelWidth - 14, compact ? 146 : 168);
+  }
+
+  private getHudLayout(): {
+    panelWidth: number;
+    panelX: number;
+    panelHeight: number;
+    compact: boolean;
+  } {
+    const margin = 12;
+    const panelWidth = Math.min(360, Math.max(250, this.scale.width - margin * 2));
+    const panelX = Math.max(margin, this.scale.width - panelWidth - margin);
+    const compact = this.scale.height < 720 || this.scale.width < 1180;
+    const panelHeight = compact ? 280 : 320;
+    return { panelWidth, panelX, panelHeight, compact };
   }
 
   private drawArena(): void {
@@ -383,6 +463,7 @@ class GameScene extends Phaser.Scene {
     this.decorGraphics.clear();
     this.arenaGraphics.clear();
     this.hazardGraphics.clear();
+    this.pickupGraphics.clear();
     this.arenaGraphics.fillStyle(0x050814, 1);
     this.arenaGraphics.fillRect(0, 0, this.snapshot.arena.width, this.snapshot.arena.height);
     this.arenaGraphics.fillStyle(0x0b1223, 0.9);
@@ -434,31 +515,44 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private drawHazards(timeSeconds: number): void {
+  private drawPickups(): void {
     if (!this.snapshot) {
       return;
     }
 
-    // Dynamische Ebene: Hazards werden pro Frame neu gezeichnet, damit Animationen fluessig wirken.
-    this.hazardGraphics.clear();
-    for (const hazard of this.snapshot.arena.hazards) {
-      this.drawHazard(hazard, timeSeconds, this.hazardDetailLevel);
+    this.pickupGraphics.clear();
+    for (const orb of this.snapshot.pickups) {
+      this.drawOrb(orb);
     }
   }
 
-  private drawHazard(
-    hazard: HazardZone,
-    timeSeconds: number,
-    detailLevel: "high" | "medium" | "low"
-  ): void {
-    // localTime verschiebt Animationen pro Zone leicht, damit nicht alles synchron "blinkt".
-    const localTime = timeSeconds + hazard.x * 0.003 + hazard.y * 0.002;
+  private drawOrb(orb: ForceOrb): void {
+    this.pickupGraphics.fillStyle(0x0f172a, 0.82);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4);
+    this.pickupGraphics.fillStyle(0xfacc15, 0.86);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 1.2);
+    this.pickupGraphics.lineStyle(1, 0xfef08a, 0.52);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 4.8);
+  }
+
+  private drawHazards(): void {
+    if (!this.snapshot) {
+      return;
+    }
+
+    // Nur auf Snapshot-Updates zeichnen reduziert Zeichenaufwand deutlich.
+    this.hazardGraphics.clear();
+    for (const hazard of this.snapshot.arena.hazards) {
+      this.drawHazard(hazard);
+    }
+  }
+
+  private drawHazard(hazard: HazardZone): void {
 
     if (hazard.type === "lava") {
-      const pulse = 0.62 + Math.sin(localTime * 2.4) * 0.16;
-      this.hazardGraphics.fillStyle(0x7f1d1d, 0.78);
+      this.hazardGraphics.fillStyle(0x7f1d1d, 0.8);
       this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-      this.hazardGraphics.fillStyle(0xdc2626, 0.48 + pulse * 0.22);
+      this.hazardGraphics.fillStyle(0xdc2626, 0.62);
       this.hazardGraphics.fillRoundedRect(
         hazard.x + 4,
         hazard.y + 5,
@@ -466,47 +560,15 @@ class GameScene extends Phaser.Scene {
         hazard.height - 10,
         8
       );
-      this.hazardGraphics.fillStyle(0xfb923c, 0.2 + pulse * 0.18);
-      this.hazardGraphics.fillRoundedRect(
-        hazard.x + 10,
-        hazard.y + 12,
-        hazard.width - 20,
-        hazard.height - 24,
-        6
-      );
-      this.hazardGraphics.lineStyle(3, 0xfda4af, 0.56 + pulse * 0.25);
+      this.hazardGraphics.lineStyle(3, 0xfda4af, 0.62);
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-
-      this.hazardGraphics.lineStyle(2, 0xfdba74, 0.34 + pulse * 0.14);
-      const waveStep = detailLevel === "high" ? 12 : detailLevel === "medium" ? 16 : 22;
-      for (let y = hazard.y + 8; y < hazard.y + hazard.height - 6; y += waveStep) {
-        const sway = Math.sin(localTime * 3 + y * 0.08) * 3;
-        this.hazardGraphics.beginPath();
-        this.hazardGraphics.moveTo(hazard.x + 8, y);
-        this.hazardGraphics.lineTo(hazard.x + hazard.width * 0.34, y - 3 + sway);
-        this.hazardGraphics.lineTo(hazard.x + hazard.width * 0.62, y + 3 - sway);
-        this.hazardGraphics.lineTo(hazard.x + hazard.width - 8, y);
-        this.hazardGraphics.strokePath();
-      }
-
-      const bubbleCount = detailLevel === "high" ? 8 : detailLevel === "medium" ? 5 : 3;
-      for (let i = 0; i < bubbleCount; i += 1) {
-        const phase = localTime * (1.6 + i * 0.1) + i * 0.7;
-        const bubbleX = hazard.x + 14 + ((i + 1) / (bubbleCount + 1)) * (hazard.width - 28);
-        const bubbleY = hazard.y + 16 + ((Math.sin(phase) + 1) * 0.5) * (hazard.height - 32);
-        const bubbleR = 1.8 + ((Math.cos(phase * 1.3) + 1) * 0.5) * 2.2;
-        this.hazardGraphics.fillStyle(0xfef08a, 0.25 + ((Math.sin(phase * 2) + 1) * 0.5) * 0.3);
-        this.hazardGraphics.fillCircle(bubbleX, bubbleY, bubbleR);
-      }
       return;
     }
 
     if (hazard.type === "electric") {
-      const pulse = 0.5 + (Math.sin(localTime * 4.3) + 1) * 0.25;
-      // Elektro bewusst in Gelb/Orange (Wunsch), ohne diagonale Linien fuer ein ruhigeres Bild.
       this.hazardGraphics.fillStyle(0x3f2a06, 0.82);
       this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-      this.hazardGraphics.fillStyle(0x92400e, 0.45 + pulse * 0.24);
+      this.hazardGraphics.fillStyle(0x92400e, 0.6);
       this.hazardGraphics.fillRoundedRect(
         hazard.x + 3,
         hazard.y + 3,
@@ -514,24 +576,14 @@ class GameScene extends Phaser.Scene {
         hazard.height - 6,
         9
       );
-      this.hazardGraphics.lineStyle(3, 0xfacc15, 0.56 + pulse * 0.32);
+      this.hazardGraphics.lineStyle(3, 0xfacc15, 0.68);
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-
-      const sparkStep = detailLevel === "high" ? 18 : detailLevel === "medium" ? 24 : 30;
-      for (let x = hazard.x + 12; x < hazard.x + hazard.width - 6; x += sparkStep) {
-        for (let y = hazard.y + 12; y < hazard.y + hazard.height - 6; y += sparkStep) {
-          const flicker = (Math.sin(localTime * 6 + x * 0.11 + y * 0.17) + 1) * 0.5;
-          this.hazardGraphics.fillStyle(0xfde047, 0.2 + flicker * 0.62);
-          this.hazardGraphics.fillCircle(x, y, 1.5 + flicker * 1.5);
-        }
-      }
       return;
     }
 
-    const pulse = 0.45 + (Math.sin(localTime * 1.6) + 1) * 0.2;
     this.hazardGraphics.fillStyle(0x020617, 0.96);
     this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-    this.hazardGraphics.fillStyle(0x0f172a, 0.78 + pulse * 0.18);
+    this.hazardGraphics.fillStyle(0x0f172a, 0.9);
     this.hazardGraphics.fillRoundedRect(
       hazard.x + 6,
       hazard.y + 6,
@@ -539,32 +591,13 @@ class GameScene extends Phaser.Scene {
       hazard.height - 12,
       8
     );
-    this.hazardGraphics.lineStyle(3, 0x64748b, 0.48 + pulse * 0.32);
+    this.hazardGraphics.lineStyle(3, 0x64748b, 0.66);
     this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
 
     const centerX = hazard.x + hazard.width / 2;
     const centerY = hazard.y + hazard.height / 2;
-    const maxRadius = Math.min(hazard.width, hazard.height) / 2 - 10;
-    this.hazardGraphics.lineStyle(2, 0x334155, 0.36 + pulse * 0.28);
-    const swirl = localTime * 0.9;
-    const radiusStep = detailLevel === "high" ? 10 : detailLevel === "medium" ? 14 : 18;
-    for (let radius = maxRadius; radius > 8; radius -= radiusStep) {
-      const wobbleX = Math.cos(swirl + radius * 0.09) * 2;
-      const wobbleY = Math.sin(swirl + radius * 0.11) * 2;
-      this.hazardGraphics.strokeEllipse(centerX + wobbleX, centerY + wobbleY, radius * 2, radius * 1.2);
-    }
-    this.hazardGraphics.fillStyle(0x020617, 0.95);
-    this.hazardGraphics.fillEllipse(centerX, centerY, maxRadius * 1.3, maxRadius * 0.75);
-
-    this.hazardGraphics.lineStyle(2, 0x475569, 0.38);
-    const arcCount = detailLevel === "high" ? 5 : detailLevel === "medium" ? 3 : 2;
-    for (let arc = 0; arc < arcCount; arc += 1) {
-      const start = swirl + arc * 1.2;
-      const end = start + 0.75;
-      this.hazardGraphics.beginPath();
-      this.hazardGraphics.arc(centerX, centerY, maxRadius * 0.72 + arc * 2, start, end, false);
-      this.hazardGraphics.strokePath();
-    }
+    this.hazardGraphics.fillStyle(0x020617, 0.92);
+    this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.64, hazard.height * 0.42);
   }
 
   private createHazardLabel(hazard: HazardZone): void {
@@ -608,26 +641,33 @@ class GameScene extends Phaser.Scene {
 
       const isLocal = player.id === this.localPlayerId;
       this.playerGraphics.fillStyle(player.color, 1);
-      this.playerGraphics.fillCircle(player.x, player.y, player.radius);
+      const render = this.renderPlayers.get(player.id);
+      const px = render?.x ?? player.x;
+      const py = render?.y ?? player.y;
+
+      this.playerGraphics.fillCircle(px, py, player.radius);
 
       this.playerGraphics.lineStyle(isLocal ? 4 : 2, isLocal ? 0xffffff : 0x111827, 0.9);
-      this.playerGraphics.strokeCircle(player.x, player.y, player.radius + (isLocal ? 3 : 1));
+      this.playerGraphics.strokeCircle(px, py, player.radius + (isLocal ? 3 : 1));
 
       const energyWidth = 36;
-      const ratio = Phaser.Math.Clamp(player.energy / 100, 0, 1);
+      const ratio = Phaser.Math.Clamp(player.charge / Math.max(1, player.chargeMax), 0, 1);
       this.playerGraphics.fillStyle(0x111827, 0.8);
-      this.playerGraphics.fillRect(player.x - energyWidth / 2, player.y - 30, energyWidth, 5);
-      this.playerGraphics.fillStyle(0x34d399, 0.95);
+      this.playerGraphics.fillRect(px - energyWidth / 2, py - 30, energyWidth, 5);
+      this.playerGraphics.fillStyle(0x22d3ee, 0.95);
       this.playerGraphics.fillRect(
-        player.x - energyWidth / 2,
-        player.y - 30,
+        px - energyWidth / 2,
+        py - 30,
         energyWidth * ratio,
         5
       );
+      this.playerGraphics.fillStyle(0xfacc15, 0.95);
+      this.playerGraphics.fillCircle(px, py, Math.max(2, player.mass * 0.06));
+
       let label = this.nameLabels.get(player.id);
       if (!label) {
         label = this.add
-          .text(player.x, player.y - 42, "", {
+          .text(px, py - 42, "", {
             fontSize: "11px",
             color: "#ffffff",
           })
@@ -636,8 +676,8 @@ class GameScene extends Phaser.Scene {
         this.nameLabels.set(player.id, label);
       }
 
-      label.setPosition(player.x, player.y - 42);
-      label.setText(`${player.name}${player.isBot ? " 🤖" : ""}`);
+      label.setPosition(px, py - 42);
+      label.setText(`${player.name}${player.isBot ? " 🤖" : ""}  M:${player.mass.toFixed(0)}`);
     }
 
     for (const [playerId, label] of this.nameLabels) {
@@ -651,7 +691,7 @@ class GameScene extends Phaser.Scene {
 
   private drawAim(player: PlayerSnapshot, input: PlayerInputPayload): void {
     this.aimLine.clear();
-    const color = input.push ? 0xf97316 : input.pull ? 0x60a5fa : 0x94a3b8;
+    const color = input.charge ? 0xf97316 : 0x94a3b8;
     this.aimLine.lineStyle(2, color, 0.85);
     this.aimLine.beginPath();
     this.aimLine.moveTo(player.x, player.y);
@@ -667,7 +707,7 @@ class GameScene extends Phaser.Scene {
     const local = this.getLocalPlayer();
     if (local) {
       this.hudText.setText(
-        `ID ${local.id.slice(0, 6)} | Modus: ${local.mode} | Energie: ${local.energy.toFixed(0)}`
+        `ID ${local.id.slice(0, 6)} | Masse: ${local.mass.toFixed(1)} | Charge: ${local.charge.toFixed(0)}/${local.chargeMax}`
       );
     } else {
       this.hudText.setText("Warte auf Spawn…");
@@ -675,15 +715,20 @@ class GameScene extends Phaser.Scene {
 
     const ranking = [...(this.snapshot?.players ?? [])]
       .sort((a, b) => b.score - a.score)
-      .slice(0, 7)
+      .slice(0, this.hudCompact ? 5 : 7)
       .map((player, index) => {
         const rankBadge = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "•";
-        const suffix = player.isBot ? "🤖" : "🧲";
-        return `${rankBadge} ${String(index + 1).padStart(2, "0")}  ${player.name.padEnd(12, " ").slice(0, 12)} ${suffix}  ${String(player.score).padStart(2, "0")} KO`;
+        const suffix = player.isBot ? "🤖" : "⚔";
+        return `${rankBadge} ${String(index + 1).padStart(2, "0")}  ${player.name.padEnd(12, " ").slice(0, 12)} ${suffix}  ${String(player.score).padStart(2, "0")} KO  M${player.mass.toFixed(0)}`;
       })
       .join("\n");
 
     this.scoreText.setText(ranking || "• Noch keine Punkte");
+    this.controlsText.setText(
+      this.hudCompact
+        ? "WASD Bewegung | LMB halten/lassen"
+        : "W A S D  → Bewegung\nMaus      → Zielen\nLMB halten → Kraft laden\nLMB loslassen → Schubstoß\nSammle Orbs für mehr Masse"
+    );
   }
 
   private updateStatus(): void {
@@ -697,6 +742,7 @@ class GameScene extends Phaser.Scene {
   shutdown(): void {
     socket.off("connect", this.onConnect);
     socket.off("disconnect", this.onDisconnect);
+    socket.off("connect_error", this.onConnectError);
     socket.off("welcome", this.onWelcome);
     socket.off("snapshot", this.onSnapshot);
     socket.off("playerLeft", this.onPlayerLeft);
