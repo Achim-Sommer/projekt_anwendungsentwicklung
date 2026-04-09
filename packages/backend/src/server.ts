@@ -31,14 +31,18 @@ const CHARGE_GAIN_RATE = 126;
 const CHARGE_DECAY_RATE = 30;
 const RESPAWN_TIME_MS = 1800;
 const TARGET_TOTAL_PLAYERS = 4;
+const MASS_MAX = 1200;
 
-const ORB_SPAWN_INTERVAL_MS = 520;
-const ORB_MAX_COUNT = 90;
+const ORB_SPAWN_INTERVAL_MS = 420;
+const ORB_MAX_COUNT = 140;
 const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 4;
 const ORB_VALUE_MAX = 8;
 const KILL_MASS_BONUS = 12;
 const KILL_SCORE_BONUS = 5;
+const CONSUME_MIN_RATIO = 1.22;
+const CONSUME_SCORE_BONUS = 3;
+const CONSUME_MASS_GAIN = 0.22;
 
 const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
@@ -154,22 +158,22 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 
 const arena: ArenaState = {
-  width: 1600,
-  height: 900,
+  width: 3000,
+  height: 1800,
   hazards: [
-    { id: "pit-mid", type: "pit", x: 735, y: 380, width: 130, height: 140 },
-    { id: "pit-north", type: "pit", x: 700, y: 120, width: 190, height: 95 },
-    { id: "pit-south", type: "pit", x: 670, y: 705, width: 240, height: 95 },
-    { id: "pit-west", type: "pit", x: 135, y: 360, width: 120, height: 160 },
-    { id: "pit-east", type: "pit", x: 1340, y: 330, width: 120, height: 170 },
-    { id: "lava-left", type: "lava", x: 220, y: 640, width: 220, height: 110 },
+    { id: "pit-mid", type: "pit", x: 1435, y: 830, width: 170, height: 170 },
+    { id: "pit-north", type: "pit", x: 1400, y: 210, width: 220, height: 120 },
+    { id: "pit-south", type: "pit", x: 1380, y: 1450, width: 250, height: 120 },
+    { id: "pit-west", type: "pit", x: 360, y: 760, width: 150, height: 210 },
+    { id: "pit-east", type: "pit", x: 2480, y: 730, width: 150, height: 210 },
+    { id: "lava-left", type: "lava", x: 420, y: 1260, width: 300, height: 140 },
     {
       id: "electric-right",
       type: "electric",
-      x: 1160,
-      y: 190,
-      width: 250,
-      height: 130,
+      x: 2160,
+      y: 350,
+      width: 340,
+      height: 170,
     },
   ],
 };
@@ -292,7 +296,7 @@ function buildSnapshot(): GameSnapshot {
 }
 
 function applyMass(player: ServerPlayer, amount: number): void {
-  player.mass = clamp(player.mass + amount, 8, 140);
+  player.mass = clamp(player.mass + amount, 8, MASS_MAX);
   player.radius = massToRadius(player.mass);
 }
 
@@ -382,7 +386,7 @@ function canPush(source: ServerPlayer, target: ServerPlayer): boolean {
   return source.mass / Math.max(1, target.mass) >= PUSH_MIN_MASS_RATIO;
 }
 
-function knockOut(victim: ServerPlayer, actorId?: string): void {
+function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "consume" = "ringout"): void {
   if (!victim.alive) {
     return;
   }
@@ -400,8 +404,54 @@ function knockOut(victim: ServerPlayer, actorId?: string): void {
   if (scorerId && scorerId !== victim.id) {
     const scorer = players.get(scorerId);
     if (scorer) {
-      scorer.score += KILL_SCORE_BONUS;
-      applyMass(scorer, KILL_MASS_BONUS + victim.mass * 0.05);
+      if (reason === "consume") {
+        scorer.score += CONSUME_SCORE_BONUS;
+        applyMass(scorer, Math.max(2, victim.mass * CONSUME_MASS_GAIN));
+      } else {
+        scorer.score += KILL_SCORE_BONUS;
+        applyMass(scorer, KILL_MASS_BONUS + victim.mass * 0.05);
+      }
+    }
+  }
+}
+
+function resolveConsumptions(playersList: ServerPlayer[]): void {
+  for (let i = 0; i < playersList.length; i += 1) {
+    const a = playersList[i];
+    if (!a || !a.alive) {
+      continue;
+    }
+
+    for (let j = i + 1; j < playersList.length; j += 1) {
+      const b = playersList[j];
+      if (!b || !b.alive) {
+        continue;
+      }
+
+      let eater: ServerPlayer | undefined;
+      let victim: ServerPlayer | undefined;
+
+      if (a.mass >= b.mass * CONSUME_MIN_RATIO) {
+        eater = a;
+        victim = b;
+      } else if (b.mass >= a.mass * CONSUME_MIN_RATIO) {
+        eater = b;
+        victim = a;
+      }
+
+      if (!eater || !victim) {
+        continue;
+      }
+
+      const dx = eater.x - victim.x;
+      const dy = eater.y - victim.y;
+      const consumeRadius = Math.max(8, eater.radius - victim.radius * 0.32);
+      if (dx * dx + dy * dy > consumeRadius * consumeRadius) {
+        continue;
+      }
+
+      victim.lastThreatBy = eater.id;
+      knockOut(victim, eater.id, "consume");
     }
   }
 }
@@ -755,6 +805,14 @@ function tickSimulation(): void {
     player.x = clamp(player.x, player.radius, arena.width - player.radius);
     player.y = clamp(player.y, player.radius, arena.height - player.radius);
 
+  }
+
+  resolveConsumptions(activePlayers);
+
+  for (const player of activePlayers) {
+    if (!player.alive) {
+      continue;
+    }
     if (isInHazard(player)) {
       knockOut(player);
     }

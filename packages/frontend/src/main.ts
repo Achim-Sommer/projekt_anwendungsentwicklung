@@ -51,6 +51,10 @@ const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(SERVER_URL
   autoConnect: false,
 });
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function normalizePlayerName(value: string): string {
   return value.trim().replace(/\s+/g, " ").slice(0, 16);
 }
@@ -116,6 +120,7 @@ class GameScene extends Phaser.Scene {
   private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
   private aimLine!: Phaser.GameObjects.Graphics;
+  private cameraTarget!: Phaser.GameObjects.Zone;
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
@@ -126,6 +131,7 @@ class GameScene extends Phaser.Scene {
   private inputSeq = 0;
   private lastInputSentAt = 0;
   private hudCompact = false;
+  private leaderboardLines = 6;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -193,6 +199,7 @@ class GameScene extends Phaser.Scene {
     this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
     this.aimLine = this.add.graphics();
+    this.cameraTarget = this.add.zone(0, 0, 1, 1);
 
     this.statusText = this.add
       .text(0, 0, "Bitte Namen eingeben…", {
@@ -220,16 +227,16 @@ class GameScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     this.controlsTitle = this.add
-      .text(0, 0, "Steuerung", {
-        fontSize: "14px",
+      .text(0, 0, "", {
+        fontSize: "12px",
         color: "#93c5fd",
       })
       .setDepth(20)
       .setScrollFactor(0);
 
     this.controlsText = this.add
-      .text(0, 0, "W A S D  → Bewegung\nMaus      → Zielen\nLMB halten → Kraft laden\nLMB loslassen → Schubstoß\nSammle Orbs für mehr Masse", {
-        fontSize: "13px",
+      .text(0, 0, "", {
+        fontSize: "11px",
         color: "#cbd5e1",
         lineSpacing: 4,
       })
@@ -277,6 +284,10 @@ class GameScene extends Phaser.Scene {
 
     this.updateStatus();
 
+    const camera = this.cameras.main;
+    camera.startFollow(this.cameraTarget, true, 0.12, 0.12);
+    camera.setDeadzone(130, 90);
+
     socket.on("connect", this.onConnect);
     socket.on("disconnect", this.onDisconnect);
     socket.on("connect_error", this.onConnectError);
@@ -295,12 +306,13 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    const moveInput = this.getMovementInput(player);
     const payload: PlayerInputPayload = {
       seq: this.inputSeq++,
-      up: this.keys.up.isDown,
-      down: this.keys.down.isDown,
-      left: this.keys.left.isDown,
-      right: this.keys.right.isDown,
+      up: moveInput.up,
+      down: moveInput.down,
+      left: moveInput.left,
+      right: moveInput.right,
       charge: this.chargePressed,
       aimX: this.pointerWorld.x || player.x,
       aimY: this.pointerWorld.y || player.y,
@@ -312,8 +324,63 @@ class GameScene extends Phaser.Scene {
     }
 
     this.updateRenderPlayers();
+    this.updateCamera(player);
     this.drawPlayers();
     this.drawAim(player, payload);
+  }
+
+  private getMovementInput(player: PlayerSnapshot): {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+  } {
+    // Agar.io-Gefuehl: Mausposition steuert die Bewegungsrichtung.
+    const render = this.renderPlayers.get(player.id);
+    const px = render?.x ?? player.x;
+    const py = render?.y ?? player.y;
+    const dx = this.pointerWorld.x - px;
+    const dy = this.pointerWorld.y - py;
+    const distance = Math.hypot(dx, dy);
+    const deadzone = Math.max(24, player.radius * 1.6);
+
+    const keyboardActive =
+      this.keys.up.isDown || this.keys.down.isDown || this.keys.left.isDown || this.keys.right.isDown;
+
+    if (keyboardActive) {
+      return {
+        up: this.keys.up.isDown,
+        down: this.keys.down.isDown,
+        left: this.keys.left.isDown,
+        right: this.keys.right.isDown,
+      };
+    }
+
+    if (distance <= deadzone) {
+      return { up: false, down: false, left: false, right: false };
+    }
+
+    const nx = dx / Math.max(distance, 0.0001);
+    const ny = dy / Math.max(distance, 0.0001);
+    return {
+      up: ny < -0.28,
+      down: ny > 0.28,
+      left: nx < -0.28,
+      right: nx > 0.28,
+    };
+  }
+
+  private updateCamera(localPlayer: PlayerSnapshot): void {
+    const camera = this.cameras.main;
+    const render = this.renderPlayers.get(localPlayer.id);
+    const px = render?.x ?? localPlayer.x;
+    const py = render?.y ?? localPlayer.y;
+    this.cameraTarget.setPosition(px, py);
+
+    const massZoom = clamp(1.32 * Math.pow(22 / Math.max(12, localPlayer.mass), 0.2), 0.72, 1.55);
+    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 900, 0.82, 1.35);
+    const desiredZoom = clamp(massZoom * viewportFactor, 0.72, 1.62);
+    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.09));
   }
 
   private syncRenderPlayersFromSnapshot(force: boolean): void {
@@ -400,36 +467,27 @@ class GameScene extends Phaser.Scene {
     }
 
     const camera = this.cameras.main;
-    const zoom = Math.min(viewportWidth / arenaWidth, viewportHeight / arenaHeight);
     camera.setBounds(0, 0, arenaWidth, arenaHeight);
-    camera.setZoom(Math.max(0.42, Math.min(1.65, zoom)));
-    camera.centerOn(arenaWidth / 2, arenaHeight / 2);
+    if (!this.getLocalPlayer()) {
+      camera.centerOn(arenaWidth / 2, arenaHeight / 2);
+    }
   }
 
   private layoutHud(): void {
     const { panelX, panelY, panelWidth, compact, ultraCompact } = this.getHudLayout();
 
-    this.statusText.setPosition(panelX + 12, panelY + 12);
-    this.hudText.setPosition(panelX + 12, panelY + 34);
-    this.scoreText.setPosition(panelX + 12, panelY + 58);
-    if (ultraCompact) {
-      this.controlsTitle.setPosition(panelX + 12, panelY + 118);
-      this.controlsText.setPosition(panelX + 12, panelY + 136);
-    } else if (compact) {
-      this.controlsTitle.setPosition(panelX + 12, panelY + 142);
-      this.controlsText.setPosition(panelX + 12, panelY + 160);
-    } else {
-      this.controlsTitle.setPosition(panelX + 12, panelY + 166);
-      this.controlsText.setPosition(panelX + 12, panelY + 186);
-    }
+    this.statusText.setPosition(12, 10);
+    this.hudText.setPosition(12, 30);
+    this.scoreText.setPosition(panelX + 10, panelY + 10);
 
-    this.statusText.setFontSize(ultraCompact ? 12 : 14);
-    this.hudText.setFontSize(ultraCompact ? 11 : 13);
-    this.scoreText.setFontSize(ultraCompact ? 10 : 12);
-    this.controlsTitle.setFontSize(ultraCompact ? 11 : 13);
-    this.controlsText.setFontSize(ultraCompact ? 10 : 12);
+    this.statusText.setFontSize(ultraCompact ? 10 : 13);
+    this.hudText.setFontSize(ultraCompact ? 10 : 12);
+    this.scoreText.setFontSize(compact ? 10 : 12);
     this.scoreText.setWordWrapWidth(panelWidth - 20, true);
-    this.controlsText.setWordWrapWidth(panelWidth - 20, true);
+
+    // Controls-Text ausblenden: Agar.io-like UI ist deutlich cleaner.
+    this.controlsTitle.setVisible(false);
+    this.controlsText.setVisible(false);
   }
 
   private renderHudPanel(): void {
@@ -437,18 +495,12 @@ class GameScene extends Phaser.Scene {
     this.hudCompact = compact;
 
     this.hudPanel.clear();
-    this.hudPanel.fillStyle(0x0b1120, 0.62);
+    this.hudPanel.fillStyle(0x0b1120, 0.55);
     this.hudPanel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
-    this.hudPanel.lineStyle(2, 0x38bdf8, 0.38);
+    this.hudPanel.lineStyle(1.5, 0x38bdf8, 0.3);
     this.hudPanel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
-    this.hudPanel.lineStyle(1, 0x94a3b8, 0.2);
-    this.hudPanel.lineBetween(panelX + 10, panelY + 52, panelX + panelWidth - 10, panelY + 52);
-    this.hudPanel.lineBetween(
-      panelX + 10,
-      panelY + (compact ? 132 : 154),
-      panelX + panelWidth - 10,
-      panelY + (compact ? 132 : 154)
-    );
+    this.hudPanel.lineStyle(1, 0x94a3b8, 0.22);
+    this.hudPanel.lineBetween(panelX + 10, panelY + 42, panelX + panelWidth - 10, panelY + 42);
   }
 
   private getHudLayout(): {
@@ -463,16 +515,17 @@ class GameScene extends Phaser.Scene {
     const narrow = this.scale.width < 960;
     const ultraCompact = this.scale.width < 720 || this.scale.height < 520;
     const panelWidth = narrow
-      ? Math.min(340, Math.max(200, this.scale.width - margin * 2))
+      ? Math.min(280, Math.max(180, this.scale.width - margin * 2))
       : this.scale.width >= 2200
-        ? 500
+        ? 380
         : this.scale.width >= 1600
-          ? 440
-          : Math.min(360, Math.max(250, this.scale.width - margin * 2));
+          ? 340
+          : Math.min(300, Math.max(220, this.scale.width - margin * 2));
     const panelX = narrow ? margin : Math.max(margin, this.scale.width - panelWidth - margin);
     const compact = this.scale.height < 760 || this.scale.width < 1180;
-    const panelHeight = ultraCompact ? 182 : compact ? 254 : 300;
-    const panelY = ultraCompact ? this.scale.height - panelHeight - margin : margin;
+    this.leaderboardLines = ultraCompact ? 4 : compact ? 5 : 6;
+    const panelHeight = ultraCompact ? 112 : compact ? 144 : 176;
+    const panelY = margin;
     return { panelWidth, panelX, panelHeight, panelY, compact, ultraCompact };
   }
 
@@ -497,7 +550,7 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics.fillRoundedRect(10, 10, this.snapshot.arena.width - 20, this.snapshot.arena.height - 20, 24);
 
     // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
-    const drawFullDecor = this.scale.width >= 900 && this.scale.height >= 600;
+    const drawFullDecor = this.scale.width >= 1100 && this.scale.height >= 700;
     const tileSize = drawFullDecor ? 72 : 120;
     for (let y = 24; y < this.snapshot.arena.height - 24; y += tileSize) {
       for (let x = 24; x < this.snapshot.arena.width - 24; x += tileSize) {
@@ -517,22 +570,11 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    this.decorGraphics.lineStyle(2, 0x0ea5e9, 0.35);
-    this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 120);
-    this.decorGraphics.lineStyle(1, 0x38bdf8, 0.25);
-    this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 190);
-
-    const beacons = [
-      { x: 40, y: 40 },
-      { x: this.snapshot.arena.width - 40, y: 40 },
-      { x: 40, y: this.snapshot.arena.height - 40 },
-      { x: this.snapshot.arena.width - 40, y: this.snapshot.arena.height - 40 },
-    ];
-    for (const beacon of beacons) {
-      this.decorGraphics.fillStyle(0x22d3ee, 0.75);
-      this.decorGraphics.fillCircle(beacon.x, beacon.y, 6);
-      this.decorGraphics.lineStyle(2, 0x67e8f9, 0.35);
-      this.decorGraphics.strokeCircle(beacon.x, beacon.y, 16);
+    if (drawFullDecor) {
+      this.decorGraphics.lineStyle(2, 0x0ea5e9, 0.35);
+      this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 120);
+      this.decorGraphics.lineStyle(1, 0x38bdf8, 0.25);
+      this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 190);
     }
 
     this.arenaGraphics.lineStyle(3, 0x22d3ee, 0.6);
@@ -757,7 +799,7 @@ class GameScene extends Phaser.Scene {
     const local = this.getLocalPlayer();
     if (local) {
       this.hudText.setText(
-        `ID ${local.id.slice(0, 6)} | Masse: ${local.mass.toFixed(1)} | Charge: ${local.charge.toFixed(0)}/${local.chargeMax}`
+        `ID ${local.id.slice(0, 6)} | Score: ${local.score} | Masse: ${local.mass.toFixed(1)} | Charge: ${local.charge.toFixed(0)}/${local.chargeMax}`
       );
     } else {
       this.hudText.setText("Warte auf Spawn…");
@@ -765,21 +807,17 @@ class GameScene extends Phaser.Scene {
 
     const ranking = [...(this.snapshot?.players ?? [])]
       .sort((a, b) => b.score - a.score)
-      .slice(0, this.hudCompact ? 4 : 6)
+      .slice(0, this.leaderboardLines)
       .map((player, index) => {
-        const rankBadge = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "•";
+        const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
         const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
         const role = player.isBot ? "BOT" : "PLY";
-        return `${rankBadge} ${index + 1}. ${shortName} ${role}  S:${player.score}  M:${player.mass.toFixed(0)}`;
+        return `${rankBadge} ${shortName} ${role}  S:${player.score}  M:${player.mass.toFixed(0)}`;
       })
       .join("\n");
 
     this.scoreText.setText(ranking || "• Noch keine Punkte");
-    this.controlsText.setText(
-      this.hudCompact
-        ? "WASD Bewegung | LMB halten/lassen"
-        : "W A S D  → Bewegung\nMaus      → Zielen\nLMB halten → Kraft laden\nLMB loslassen → Schubstoß\nSammle Orbs für mehr Masse"
-    );
+    this.scoreText.setAlign("left");
   }
 
   private updateStatus(): void {
