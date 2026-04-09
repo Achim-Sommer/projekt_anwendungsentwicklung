@@ -318,7 +318,7 @@ class GameScene extends Phaser.Scene {
       aimY: this.pointerWorld.y || player.y,
     };
 
-    if (this.time.now - this.lastInputSentAt >= 50) {
+    if (this.time.now - this.lastInputSentAt >= 33) {
       socket.emit("input", payload);
       this.lastInputSentAt = this.time.now;
     }
@@ -417,6 +417,8 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    const dt = Math.max(0.001, this.game.loop.delta / 1000);
+
     for (const player of this.snapshot.players) {
       if (!player.alive) {
         continue;
@@ -433,11 +435,25 @@ class GameScene extends Phaser.Scene {
         continue;
       }
 
-      // Weiches Nachziehen auf Serverposition statt hartem Snappen.
-      state.x = Phaser.Math.Linear(state.x, player.x, 0.32);
-      state.y = Phaser.Math.Linear(state.y, player.y, 0.32);
-      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.3);
-      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.3);
+      // Leichte Extrapolation + Korrektur ergibt sichtbar fluessigere Bewegung.
+      state.x += state.vx * dt;
+      state.y += state.vy * dt;
+
+      const blend = clamp(0.2 + dt * 6.5, 0.2, 0.48);
+      state.x = Phaser.Math.Linear(state.x, player.x, blend);
+      state.y = Phaser.Math.Linear(state.y, player.y, blend);
+      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.38);
+      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.38);
+
+      const errorX = player.x - state.x;
+      const errorY = player.y - state.y;
+      const error = Math.hypot(errorX, errorY);
+      if (error > 240) {
+        state.x = player.x;
+        state.y = player.y;
+        state.vx = player.vx;
+        state.vy = player.vy;
+      }
     }
   }
 
@@ -761,7 +777,7 @@ class GameScene extends Phaser.Scene {
       }
 
       label.setPosition(px, py - 42);
-      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}  M:${player.mass.toFixed(0)}`;
+      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -799,7 +815,7 @@ class GameScene extends Phaser.Scene {
     const local = this.getLocalPlayer();
     if (local) {
       this.hudText.setText(
-        `ID ${local.id.slice(0, 6)} | Score: ${local.score} | Masse: ${local.mass.toFixed(1)} | Charge: ${local.charge.toFixed(0)}/${local.chargeMax}`
+        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}`
       );
     } else {
       this.hudText.setText("Warte auf Spawn…");
@@ -812,7 +828,7 @@ class GameScene extends Phaser.Scene {
         const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
         const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
         const role = player.isBot ? "BOT" : "PLY";
-        return `${rankBadge} ${shortName} ${role}  S:${player.score}  M:${player.mass.toFixed(0)}`;
+        return `${rankBadge} ${shortName} ${role}  ${player.score} P`;
       })
       .join("\n");
 

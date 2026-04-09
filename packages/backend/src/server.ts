@@ -13,8 +13,8 @@ import type {
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
-const TICK_RATE = 20;
-const SNAPSHOT_RATE = 7;
+const TICK_RATE = 24;
+const SNAPSHOT_RATE = 10;
 const DT = 1 / TICK_RATE;
 
 const PLAYER_START_MASS = 20;
@@ -31,7 +31,6 @@ const CHARGE_GAIN_RATE = 126;
 const CHARGE_DECAY_RATE = 30;
 const RESPAWN_TIME_MS = 1800;
 const TARGET_TOTAL_PLAYERS = 4;
-const MASS_MAX = 1200;
 
 const ORB_SPAWN_INTERVAL_MS = 420;
 const ORB_MAX_COUNT = 140;
@@ -39,9 +38,7 @@ const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 4;
 const ORB_VALUE_MAX = 8;
 const KILL_MASS_BONUS = 12;
-const KILL_SCORE_BONUS = 5;
 const CONSUME_MIN_RATIO = 1.22;
-const CONSUME_SCORE_BONUS = 3;
 const CONSUME_MASS_GAIN = 0.22;
 
 const AI_TARGET_RETHINK_BASE_MS = 320;
@@ -296,7 +293,7 @@ function buildSnapshot(): GameSnapshot {
 }
 
 function applyMass(player: ServerPlayer, amount: number): void {
-  player.mass = clamp(player.mass + amount, 8, MASS_MAX);
+  player.mass = Math.max(8, player.mass + amount);
   player.radius = massToRadius(player.mass);
 }
 
@@ -391,6 +388,9 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
     return;
   }
 
+  const victimPoints = Math.max(0, victim.score);
+  victim.score = 0;
+
   victim.alive = false;
   victim.vx = 0;
   victim.vy = 0;
@@ -404,11 +404,10 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   if (scorerId && scorerId !== victim.id) {
     const scorer = players.get(scorerId);
     if (scorer) {
+      scorer.score += victimPoints;
       if (reason === "consume") {
-        scorer.score += CONSUME_SCORE_BONUS;
         applyMass(scorer, Math.max(2, victim.mass * CONSUME_MASS_GAIN));
       } else {
-        scorer.score += KILL_SCORE_BONUS;
         applyMass(scorer, KILL_MASS_BONUS + victim.mass * 0.05);
       }
     }
