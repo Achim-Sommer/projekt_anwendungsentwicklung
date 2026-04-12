@@ -17,7 +17,7 @@ import type {
 
 const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 60;
-const SNAPSHOT_RATE = 40;
+const SNAPSHOT_RATE = 30;
 const DT = 1 / TICK_RATE;
 const STREAM_PLAYER_RADIUS = 980;
 const STREAM_PICKUP_RADIUS = 1120;
@@ -58,19 +58,8 @@ const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
 const AI_SEPARATION_RADIUS = 170;
 const AI_SEPARATION_RADIUS_SQ = AI_SEPARATION_RADIUS * AI_SEPARATION_RADIUS;
-
-const SKIN_TIERS: Array<{
-  id: SkinId;
-  minScore: number;
-  minPlayMs: number;
-  color: number;
-}> = [
-  { id: "starter", minScore: 0, minPlayMs: 0, color: 0x38bdf8 },
-  { id: "mint", minScore: 24, minPlayMs: 90_000, color: 0x34d399 },
-  { id: "sunset", minScore: 54, minPlayMs: 210_000, color: 0xfb923c },
-  { id: "rose", minScore: 94, minPlayMs: 360_000, color: 0xfb7185 },
-  { id: "gold", minScore: 140, minPlayMs: 540_000, color: 0xfacc15 },
-];
+const DEFAULT_PLAYER_COLOR = 0x38bdf8;
+const BOT_PLAYER_COLOR = 0x64748b;
 
 const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
 const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
@@ -324,23 +313,8 @@ function findSafeSpawn(excludeId?: string): { x: number; y: number } {
   return best;
 }
 
-function resolveSkinTierForPlayer(player: ServerPlayer, now: number): (typeof SKIN_TIERS)[number] {
-  const playedMs = Math.max(0, now - player.connectedAt);
-  let bestTier = SKIN_TIERS[0];
-  for (const tier of SKIN_TIERS) {
-    if (player.score >= tier.minScore || playedMs >= tier.minPlayMs) {
-      bestTier = tier;
-    }
-  }
-  return bestTier;
-}
-
-function refreshPlayerCosmetics(now: number): void {
-  for (const player of players.values()) {
-    const tier = resolveSkinTierForPlayer(player, now);
-    player.skinId = tier.id;
-    player.color = tier.color;
-  }
+function baseColorForPlayer(player: ServerPlayer): number {
+  return player.isBot ? BOT_PLAYER_COLOR : DEFAULT_PLAYER_COLOR;
 }
 
 function hasSpeedBoost(player: ServerPlayer, now: number): boolean {
@@ -605,7 +579,7 @@ function sanitizePlayerName(value: unknown): string {
 function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
   const now = Date.now();
   const spawn = findSafeSpawn(id);
-  const starterSkin = SKIN_TIERS[0];
+  const baseColor = isBot ? BOT_PLAYER_COLOR : DEFAULT_PLAYER_COLOR;
   return {
     id,
     name,
@@ -614,8 +588,8 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     vx: 0,
     vy: 0,
     radius: massToRadius(PLAYER_START_MASS),
-    color: starterSkin.color,
-    skinId: starterSkin.id,
+    color: baseColor,
+    skinId: "starter",
     mass: PLAYER_START_MASS,
     score: 0,
     isBot,
@@ -877,6 +851,8 @@ function handleRespawns(now: number): void {
     player.alive = true;
     player.spawnedAt = now;
     player.spawnProtectedUntil = now + SPAWN_PROTECTION_MS;
+    player.skinId = "starter";
+    player.color = baseColorForPlayer(player);
     player.speedBoostUntil = 0;
     player.invulnerableUntil = 0;
     player.stealthUntil = 0;
@@ -1136,7 +1112,6 @@ function tickSimulation(): void {
   spawnOrb(now);
   runAi(now);
   handleRespawns(now);
-  refreshPlayerCosmetics(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);
 

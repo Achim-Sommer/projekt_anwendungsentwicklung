@@ -10,7 +10,6 @@ import type {
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
-  SkinId,
 } from "@projekt/shared";
 
 // In Produktion verwenden wir standardmaessig dieselbe Origin wie die Seite selbst.
@@ -59,14 +58,6 @@ if (!hudStatus || !hudPlayer || !hudScoreboard) {
 const hudStatusElement = hudStatus;
 const hudPlayerElement = hudPlayer;
 const hudScoreboardElement = hudScoreboard;
-
-const SKIN_LABELS: Record<SkinId, string> = {
-  starter: "Starter",
-  mint: "Mint",
-  sunset: "Sunset",
-  rose: "Rose",
-  gold: "Gold",
-};
 
 let playerName = "";
 
@@ -141,7 +132,6 @@ class GameScene extends Phaser.Scene {
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
   private lastLabelText = new Map<string, string>();
-  private lastLabelAppearance = new Map<string, string>();
   private snapshotPlayers = new Map<string, PlayerSnapshot>();
   private snapshotPickups = new Map<string, ForceOrb>();
 
@@ -210,7 +200,7 @@ class GameScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor(0x1e293b);
-    this.cameras.main.roundPixels = true;
+    this.cameras.main.roundPixels = false;
 
     this.arenaGraphics = this.add.graphics();
     this.hazardGraphics = this.add.graphics();
@@ -337,10 +327,10 @@ class GameScene extends Phaser.Scene {
     const py = render?.y ?? localPlayer.y;
     this.cameraTarget.setPosition(px, py);
 
-    const massZoom = clamp(1.32 * Math.pow(22 / Math.max(12, localPlayer.mass), 0.2), 0.72, 1.55);
-    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 900, 0.82, 1.35);
-    const desiredZoom = clamp(massZoom * viewportFactor, 0.72, 1.62);
-    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.09));
+    const massZoom = clamp(1.08 * Math.pow(24 / Math.max(12, localPlayer.mass), 0.2), 0.58, 1.24);
+    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 920, 0.8, 1.32);
+    const desiredZoom = clamp(massZoom * viewportFactor, 0.6, 1.28);
+    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.075));
   }
 
   private syncRenderPlayersFromSnapshot(force: boolean): void {
@@ -567,26 +557,18 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawOrb(orb: ForceOrb): void {
-    const styleByKind: Record<PickupKind, { core: number; glow: number; ring: number; alpha: number }> = {
-      mass: { core: 0xfde047, glow: 0xfffbeb, ring: 0x84cc16, alpha: 0.94 },
-      speed: { core: 0x22d3ee, glow: 0xe0f2fe, ring: 0x0284c7, alpha: 0.92 },
-      shield: { core: 0x60a5fa, glow: 0xdbeafe, ring: 0x1d4ed8, alpha: 0.92 },
-      stealth: { core: 0xc4b5fd, glow: 0xf3e8ff, ring: 0x7c3aed, alpha: 0.9 },
+    const styleByKind: Record<PickupKind, { core: number; ring: number; alpha: number }> = {
+      mass: { core: 0xfde047, ring: 0x84cc16, alpha: 0.9 },
+      speed: { core: 0x22d3ee, ring: 0x0369a1, alpha: 0.88 },
+      shield: { core: 0x60a5fa, ring: 0x1d4ed8, alpha: 0.88 },
+      stealth: { core: 0xc4b5fd, ring: 0x7c3aed, alpha: 0.86 },
     };
 
     const style = styleByKind[orb.kind] ?? styleByKind.mass;
-    const pulse = 0.88 + 0.12 * (0.5 + 0.5 * Math.sin(this.time.now / 150 + orb.x * 0.01));
-    this.pickupGraphics.fillStyle(style.glow, 0.42 * pulse);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 5.2);
     this.pickupGraphics.fillStyle(style.core, style.alpha);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + (orb.kind === "mass" ? 1.2 : 0.6));
-    this.pickupGraphics.lineStyle(1.5, style.ring, 0.72 * pulse);
-    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 5.9);
-
-    if (orb.kind !== "mass") {
-      this.pickupGraphics.lineStyle(1, 0xffffff, 0.52 * pulse);
-      this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 2.6);
-    }
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7);
+    this.pickupGraphics.lineStyle(1, style.ring, 0.62);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.2);
   }
 
   private drawHazards(): void {
@@ -737,54 +719,27 @@ class GameScene extends Phaser.Scene {
       if (!label) {
         label = this.add
           .text(px, py - 42, "", {
-            fontFamily: "Trebuchet MS, Verdana, sans-serif",
+            fontFamily: "Segoe UI, Tahoma, sans-serif",
             fontSize: "12px",
-            fontStyle: "bold",
+            fontStyle: "normal",
             color: "#f8fafc",
-            stroke: "#0f172a",
-            strokeThickness: 2,
-            backgroundColor: "#0f172acc",
-            padding: { left: 8, right: 8, top: 3, bottom: 3 },
+            backgroundColor: "#0f172ab3",
+            padding: { left: 6, right: 6, top: 2, bottom: 2 },
           })
           .setOrigin(0.5)
           .setDepth(5);
-        label.setShadow(0, 1, "#020617aa", 4, false, true);
+        label.setResolution(Math.min(2, window.devicePixelRatio || 1));
         this.nameLabels.set(player.id, label);
       }
 
-      const labelOffsetY = Math.max(22, player.radius + 15);
+      const labelOffsetY = Math.max(20, player.radius + 13);
       label.setPosition(px, py - labelOffsetY);
       label.setVisible(showNameLabels || player.id === this.localPlayerId);
-      const shieldMarker = hasSpawnProtection ? " 🛡" : "";
-      const invulnMarker = player.invulnerableMsLeft > 0 ? " ⛨" : "";
-      const stealthMarker = player.stealthMsLeft > 0 ? " 👁" : "";
-      const isLocalPlayer = player.id === this.localPlayerId;
-      const appearanceKey = [
-        isLocalPlayer ? "local" : "remote",
-        player.isBot ? "bot" : "human",
-        hasSpawnProtection ? "spawn" : "-",
-        player.invulnerableMsLeft > 0 ? "invuln" : "-",
-        player.stealthMsLeft > 0 ? "stealth" : "-",
-      ].join("|");
-      if (this.lastLabelAppearance.get(player.id) !== appearanceKey) {
-        const backgroundColor = isLocalPlayer
-          ? "#0ea5e9cf"
-          : player.isBot
-            ? "#334155cf"
-            : "#0f172ac9";
-        const borderColor = hasSpawnProtection || player.invulnerableMsLeft > 0
-          ? "#86efac"
-          : player.stealthMsLeft > 0
-            ? "#c4b5fd"
-            : "#e2e8f0";
-        const textColor = isLocalPlayer ? "#ecfeff" : "#f8fafc";
-        label.setBackgroundColor(backgroundColor);
-        label.setColor(textColor);
-        label.setStroke(borderColor, 2);
-        this.lastLabelAppearance.set(player.id, appearanceKey);
-      }
-
-      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}${shieldMarker}${invulnMarker}${stealthMarker}`;
+      const botMarker = player.isBot ? " [BOT]" : "";
+      const shieldMarker = hasSpawnProtection ? " [SAFE]" : "";
+      const invulnMarker = player.invulnerableMsLeft > 0 ? " [INV]" : "";
+      const stealthMarker = player.stealthMsLeft > 0 ? " [STL]" : "";
+      const labelText = `${player.name}${botMarker}${shieldMarker}${invulnMarker}${stealthMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -803,7 +758,6 @@ class GameScene extends Phaser.Scene {
         label.destroy();
         this.nameLabels.delete(playerId);
         this.lastLabelText.delete(playerId);
-        this.lastLabelAppearance.delete(playerId);
       } else if (!showNameLabels && playerId !== this.localPlayerId) {
         label.setVisible(false);
       }
@@ -824,7 +778,6 @@ class GameScene extends Phaser.Scene {
   private updateHud(): void {
     const local = this.getLocalPlayer();
     if (local) {
-      const skinText = `Skin: ${SKIN_LABELS[local.skinId] ?? local.skinId}`;
       const protectionText =
         local.spawnProtectionMsLeft > 0
           ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
@@ -835,7 +788,7 @@ class GameScene extends Phaser.Scene {
         this.formatEffectLabel("Unsichtbar", local.stealthMsLeft),
       ].filter((entry): entry is string => Boolean(entry));
       const effectText = effects.length > 0 ? ` | Effekte: ${effects.join(" • ")}` : "";
-      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score} | ${skinText}${protectionText}${effectText}`;
+      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${effectText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
@@ -882,7 +835,6 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
-    this.lastLabelAppearance.clear();
     window.removeEventListener("resize", this.handleWindowResize);
   }
 }
