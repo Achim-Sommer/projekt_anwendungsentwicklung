@@ -28,6 +28,8 @@ export interface ForceOrb {
   radius: number;
 }
 
+export type SkinId = "starter" | "mint" | "sunset" | "rose" | "gold";
+
 export interface PlayerSnapshot {
   id: string;
   name: string;
@@ -37,6 +39,8 @@ export interface PlayerSnapshot {
   vy: number;
   radius: number;
   color: number;
+  skinId: SkinId;
+  spawnProtectionMsLeft: number;
   mass: number;
   score: number;
   isBot: boolean;

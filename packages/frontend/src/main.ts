@@ -9,6 +9,7 @@ import type {
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
+  SkinId,
 } from "@projekt/shared";
 
 // In Produktion verwenden wir standardmaessig dieselbe Origin wie die Seite selbst.
@@ -57,6 +58,14 @@ if (!hudStatus || !hudPlayer || !hudScoreboard) {
 const hudStatusElement = hudStatus;
 const hudPlayerElement = hudPlayer;
 const hudScoreboardElement = hudScoreboard;
+
+const SKIN_LABELS: Record<SkinId, string> = {
+  starter: "Starter",
+  mint: "Mint",
+  sunset: "Sunset",
+  rose: "Rose",
+  gold: "Gold",
+};
 
 let playerName = "";
 
@@ -196,7 +205,7 @@ class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.cameras.main.setBackgroundColor(0x111827);
+    this.cameras.main.setBackgroundColor(0xbfe7ff);
     this.cameras.main.roundPixels = true;
 
     this.arenaGraphics = this.add.graphics();
@@ -457,9 +466,9 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics.clear();
     this.hazardGraphics.clear();
     this.pickupGraphics.clear();
-    this.arenaGraphics.fillStyle(0x050814, 1);
+    this.arenaGraphics.fillStyle(0xbfe7ff, 1);
     this.arenaGraphics.fillRect(0, 0, this.arena.width, this.arena.height);
-    this.arenaGraphics.fillStyle(0x0b1223, 0.9);
+    this.arenaGraphics.fillStyle(0xe8f9ff, 0.95);
     this.arenaGraphics.fillRoundedRect(10, 10, this.arena.width - 20, this.arena.height - 20, 24);
 
     // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
@@ -468,13 +477,13 @@ class GameScene extends Phaser.Scene {
     for (let y = 24; y < this.arena.height - 24; y += tileSize) {
       for (let x = 24; x < this.arena.width - 24; x += tileSize) {
         const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
-        this.decorGraphics.fillStyle(isAlt ? 0x111f38 : 0x0f1a2f, drawFullDecor ? 0.36 : 0.2);
+        this.decorGraphics.fillStyle(isAlt ? 0xd7f5e5 : 0xd8e9ff, drawFullDecor ? 0.5 : 0.34);
         this.decorGraphics.fillRoundedRect(x, y, tileSize - 10, tileSize - 10, 8);
       }
     }
 
     if (drawFullDecor) {
-      this.decorGraphics.lineStyle(1, 0x1e293b, 0.28);
+      this.decorGraphics.lineStyle(1, 0x7da4b2, 0.32);
       for (let x = 24; x < this.arena.width - 20; x += tileSize) {
         this.decorGraphics.lineBetween(x, 20, x, this.arena.height - 20);
       }
@@ -484,13 +493,13 @@ class GameScene extends Phaser.Scene {
     }
 
     if (drawFullDecor) {
-      this.decorGraphics.lineStyle(2, 0x0ea5e9, 0.35);
+      this.decorGraphics.lineStyle(2, 0x6ee7b7, 0.4);
       this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 120);
-      this.decorGraphics.lineStyle(1, 0x38bdf8, 0.25);
+      this.decorGraphics.lineStyle(1, 0x60a5fa, 0.34);
       this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 190);
     }
 
-    this.arenaGraphics.lineStyle(3, 0x22d3ee, 0.6);
+    this.arenaGraphics.lineStyle(3, 0x2aa5d8, 0.58);
     this.arenaGraphics.strokeRect(0, 0, this.arena.width, this.arena.height);
 
     for (const hazard of this.arena.hazards) {
@@ -520,11 +529,11 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawOrb(orb: ForceOrb): void {
-    this.pickupGraphics.fillStyle(0x0f172a, 0.82);
+    this.pickupGraphics.fillStyle(0xffffff, 0.58);
     this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4);
-    this.pickupGraphics.fillStyle(0xfacc15, 0.86);
+    this.pickupGraphics.fillStyle(0xfde047, 0.94);
     this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 1.2);
-    this.pickupGraphics.lineStyle(1, 0xfef08a, 0.52);
+    this.pickupGraphics.lineStyle(1, 0x84cc16, 0.56);
     this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 4.8);
   }
 
@@ -543,9 +552,9 @@ class GameScene extends Phaser.Scene {
   private drawHazard(hazard: HazardZone): void {
 
     if (hazard.type === "lava") {
-      this.hazardGraphics.fillStyle(0x7f1d1d, 0.8);
+      this.hazardGraphics.fillStyle(0xfca5a5, 0.58);
       this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-      this.hazardGraphics.fillStyle(0xdc2626, 0.62);
+      this.hazardGraphics.fillStyle(0xf97316, 0.62);
       this.hazardGraphics.fillRoundedRect(
         hazard.x + 4,
         hazard.y + 5,
@@ -553,15 +562,15 @@ class GameScene extends Phaser.Scene {
         hazard.height - 10,
         8
       );
-      this.hazardGraphics.lineStyle(3, 0xfda4af, 0.62);
+      this.hazardGraphics.lineStyle(3, 0xdc2626, 0.74);
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
       return;
     }
 
     if (hazard.type === "electric") {
-      this.hazardGraphics.fillStyle(0x3f2a06, 0.82);
+      this.hazardGraphics.fillStyle(0xfde68a, 0.54);
       this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-      this.hazardGraphics.fillStyle(0x92400e, 0.6);
+      this.hazardGraphics.fillStyle(0xfacc15, 0.62);
       this.hazardGraphics.fillRoundedRect(
         hazard.x + 3,
         hazard.y + 3,
@@ -569,14 +578,14 @@ class GameScene extends Phaser.Scene {
         hazard.height - 6,
         9
       );
-      this.hazardGraphics.lineStyle(3, 0xfacc15, 0.68);
+      this.hazardGraphics.lineStyle(3, 0xd97706, 0.76);
       this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
       return;
     }
 
-    this.hazardGraphics.fillStyle(0x020617, 0.96);
+    this.hazardGraphics.fillStyle(0x1e293b, 0.76);
     this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
-    this.hazardGraphics.fillStyle(0x0f172a, 0.9);
+    this.hazardGraphics.fillStyle(0x334155, 0.8);
     this.hazardGraphics.fillRoundedRect(
       hazard.x + 6,
       hazard.y + 6,
@@ -584,12 +593,12 @@ class GameScene extends Phaser.Scene {
       hazard.height - 12,
       8
     );
-    this.hazardGraphics.lineStyle(3, 0x64748b, 0.66);
+    this.hazardGraphics.lineStyle(3, 0x0f172a, 0.72);
     this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
 
     const centerX = hazard.x + hazard.width / 2;
     const centerY = hazard.y + hazard.height / 2;
-    this.hazardGraphics.fillStyle(0x020617, 0.92);
+    this.hazardGraphics.fillStyle(0x0b1322, 0.88);
     this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.64, hazard.height * 0.42);
   }
 
@@ -615,9 +624,9 @@ class GameScene extends Phaser.Scene {
     const label = this.add
       .text(hazard.x + 10, hazard.y + 8, `${icon} ${title}`, {
         fontSize: "12px",
-        color: "#f8fafc",
+        color: "#0f172a",
         fontStyle: "bold",
-        backgroundColor: "#0f172acc",
+        backgroundColor: "#f8fafccc",
         padding: { left: 8, right: 8, top: 4, bottom: 4 },
       })
       .setDepth(4);
@@ -660,7 +669,11 @@ class GameScene extends Phaser.Scene {
     const showNameLabels = visiblePlayers.length <= 28;
 
     for (const player of visiblePlayers) {
-      this.playerGraphics.fillStyle(player.color, 1);
+      const hasSpawnProtection = player.spawnProtectionMsLeft > 0;
+      const protectionPulse = hasSpawnProtection
+        ? 0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this.time.now / 130))
+        : 1;
+      this.playerGraphics.fillStyle(player.color, protectionPulse);
       const render = this.renderPlayers.get(player.id);
       const px = render?.x ?? player.x;
       const py = render?.y ?? player.y;
@@ -682,7 +695,8 @@ class GameScene extends Phaser.Scene {
 
       label.setPosition(px, py - 42);
       label.setVisible(showNameLabels || player.id === this.localPlayerId);
-      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}`;
+      const shieldMarker = hasSpawnProtection ? " 🛡" : "";
+      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}${shieldMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -714,7 +728,12 @@ class GameScene extends Phaser.Scene {
   private updateHud(): void {
     const local = this.getLocalPlayer();
     if (local) {
-      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}`;
+      const skinText = `Skin: ${SKIN_LABELS[local.skinId] ?? local.skinId}`;
+      const protectionText =
+        local.spawnProtectionMsLeft > 0
+          ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
+          : "";
+      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score} | ${skinText}${protectionText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
@@ -768,7 +787,7 @@ const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   width: 1280,
   height: 720,
-  backgroundColor: "#111827",
+  backgroundColor: "#bfe7ff",
   antialias: false,
   powerPreference: "high-performance",
   fps: {

@@ -10,6 +10,7 @@ import type {
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
+  SkinId,
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
@@ -22,6 +23,10 @@ const PLAYER_ACCELERATION_BASE = 1850;
 const PLAYER_MAX_SPEED_BASE = 420;
 const PLAYER_DRAG = 0.92;
 const RESPAWN_TIME_MS = 1800;
+const SPAWN_PROTECTION_MS = 2400;
+const SPAWN_SAFE_PLAYER_DISTANCE = 250;
+const SPAWN_SAFE_HAZARD_DISTANCE = 120;
+const SPAWN_ATTEMPTS = 40;
 const TARGET_TOTAL_PLAYERS = 4;
 
 const ORB_SPAWN_INTERVAL_MS = 420;
@@ -40,6 +45,19 @@ const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
 const AI_SEPARATION_RADIUS = 170;
 const AI_SEPARATION_RADIUS_SQ = AI_SEPARATION_RADIUS * AI_SEPARATION_RADIUS;
+
+const SKIN_TIERS: Array<{
+  id: SkinId;
+  minScore: number;
+  minPlayMs: number;
+  color: number;
+}> = [
+  { id: "starter", minScore: 0, minPlayMs: 0, color: 0x38bdf8 },
+  { id: "mint", minScore: 24, minPlayMs: 90_000, color: 0x34d399 },
+  { id: "sunset", minScore: 54, minPlayMs: 210_000, color: 0xfb923c },
+  { id: "rose", minScore: 94, minPlayMs: 360_000, color: 0xfb7185 },
+  { id: "gold", minScore: 140, minPlayMs: 540_000, color: 0xfacc15 },
+];
 
 const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
 const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
@@ -66,11 +84,15 @@ interface ServerPlayer {
   vy: number;
   radius: number;
   color: number;
+  skinId: SkinId;
   mass: number;
   score: number;
   isBot: boolean;
   alive: boolean;
   respawnAt: number;
+  connectedAt: number;
+  spawnedAt: number;
+  spawnProtectedUntil: number;
   lastInput: PlayerInputPayload;
   lastThreatBy?: string;
   aiTargetId?: string;
@@ -234,8 +256,82 @@ function randomSpawn() {
   };
 }
 
-function randomColor() {
-  return 0x44aaff + Math.floor(Math.random() * 0x884400);
+function distanceToNearestHazard(x: number, y: number): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (const hazard of arena.hazards) {
+    const nearestX = clamp(x, hazard.x, hazard.x + hazard.width);
+    const nearestY = clamp(y, hazard.y, hazard.y + hazard.height);
+    const dx = x - nearestX;
+    const dy = y - nearestY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < best) {
+      best = dist;
+    }
+  }
+  return best;
+}
+
+function distanceToNearestAlivePlayer(x: number, y: number, excludeId?: string): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (const candidate of players.values()) {
+    if (!candidate.alive || candidate.id === excludeId) {
+      continue;
+    }
+    const dist = Math.hypot(x - candidate.x, y - candidate.y) - candidate.radius;
+    if (dist < best) {
+      best = dist;
+    }
+  }
+  return best;
+}
+
+function findSafeSpawn(excludeId?: string): { x: number; y: number } {
+  let best = randomSpawn();
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let i = 0; i < SPAWN_ATTEMPTS; i += 1) {
+    const candidate = randomSpawn();
+    if (isPointInHazard(candidate.x, candidate.y)) {
+      continue;
+    }
+
+    const playerDistance = distanceToNearestAlivePlayer(candidate.x, candidate.y, excludeId);
+    const hazardDistance = distanceToNearestHazard(candidate.x, candidate.y);
+
+    if (
+      playerDistance >= SPAWN_SAFE_PLAYER_DISTANCE &&
+      hazardDistance >= SPAWN_SAFE_HAZARD_DISTANCE
+    ) {
+      return candidate;
+    }
+
+    const score = Math.min(playerDistance, 600) * 0.78 + Math.min(hazardDistance, 280) * 0.22;
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+function resolveSkinTierForPlayer(player: ServerPlayer, now: number): (typeof SKIN_TIERS)[number] {
+  const playedMs = Math.max(0, now - player.connectedAt);
+  let bestTier = SKIN_TIERS[0];
+  for (const tier of SKIN_TIERS) {
+    if (player.score >= tier.minScore || playedMs >= tier.minPlayMs) {
+      bestTier = tier;
+    }
+  }
+  return bestTier;
+}
+
+function refreshPlayerCosmetics(now: number): void {
+  for (const player of players.values()) {
+    const tier = resolveSkinTierForPlayer(player, now);
+    player.skinId = tier.id;
+    player.color = tier.color;
+  }
 }
 
 function sanitizePlayerName(value: unknown): string {
@@ -251,7 +347,9 @@ function sanitizePlayerName(value: unknown): string {
 }
 
 function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
-  const spawn = randomSpawn();
+  const now = Date.now();
+  const spawn = findSafeSpawn(id);
+  const starterSkin = SKIN_TIERS[0];
   return {
     id,
     name,
@@ -260,12 +358,16 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     vx: 0,
     vy: 0,
     radius: massToRadius(PLAYER_START_MASS),
-    color: randomColor(),
+    color: starterSkin.color,
+    skinId: starterSkin.id,
     mass: PLAYER_START_MASS,
     score: 0,
     isBot,
     alive: true,
     respawnAt: 0,
+    connectedAt: now,
+    spawnedAt: now,
+    spawnProtectedUntil: now + SPAWN_PROTECTION_MS,
     lastInput: {
       seq: 0,
       up: false,
@@ -279,6 +381,7 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
 }
 
 function buildSnapshot(): GameSnapshot {
+  const now = Date.now();
   const playerSnapshots: PlayerSnapshot[] = Array.from(players.values()).map((player) => ({
     id: player.id,
     name: player.name,
@@ -288,6 +391,8 @@ function buildSnapshot(): GameSnapshot {
     vy: player.vy,
     radius: player.radius,
     color: player.color,
+    skinId: player.skinId,
+    spawnProtectionMsLeft: Math.max(0, player.spawnProtectedUntil - now),
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -403,8 +508,11 @@ function hazardRepulsion(player: ServerPlayer): { x: number; y: number } {
   return { x: sumX, y: sumY };
 }
 
-function canConsumeTarget(source: ServerPlayer, target: ServerPlayer): boolean {
+function canConsumeTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
   if (source.id === target.id || !source.alive || !target.alive) {
+    return false;
+  }
+  if (source.spawnProtectedUntil > now || target.spawnProtectedUntil > now) {
     return false;
   }
   return source.mass >= target.mass * CONSUME_MIN_RATIO;
@@ -439,7 +547,7 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   }
 }
 
-function resolveConsumptions(playersList: ServerPlayer[]): void {
+function resolveConsumptions(playersList: ServerPlayer[], now: number): void {
   for (let i = 0; i < playersList.length; i += 1) {
     const a = playersList[i];
     if (!a || !a.alive) {
@@ -455,10 +563,10 @@ function resolveConsumptions(playersList: ServerPlayer[]): void {
       let eater: ServerPlayer | undefined;
       let victim: ServerPlayer | undefined;
 
-      if (a.mass >= b.mass * CONSUME_MIN_RATIO) {
+      if (canConsumeTarget(a, b, now)) {
         eater = a;
         victim = b;
-      } else if (b.mass >= a.mass * CONSUME_MIN_RATIO) {
+      } else if (canConsumeTarget(b, a, now)) {
         eater = b;
         victim = a;
       }
@@ -486,12 +594,14 @@ function handleRespawns(now: number): void {
       continue;
     }
 
-    const spawn = randomSpawn();
+    const spawn = findSafeSpawn(player.id);
     player.x = spawn.x;
     player.y = spawn.y;
     player.vx = 0;
     player.vy = 0;
     player.alive = true;
+    player.spawnedAt = now;
+    player.spawnProtectedUntil = now + SPAWN_PROTECTION_MS;
     player.lastThreatBy = undefined;
   }
 }
@@ -588,7 +698,7 @@ function runAi(now: number): void {
       let targetPlayer: ServerPlayer | undefined;
       let targetPlayerDistSq = Number.POSITIVE_INFINITY;
       for (const candidate of list) {
-        if (candidate.id === bot.id || !candidate.alive || !canConsumeTarget(bot, candidate)) {
+        if (candidate.id === bot.id || !candidate.alive || !canConsumeTarget(bot, candidate, now)) {
           continue;
         }
         const dx = candidate.x - bot.x;
@@ -722,6 +832,7 @@ function tickSimulation(): void {
   spawnOrb(now);
   runAi(now);
   handleRespawns(now);
+  refreshPlayerCosmetics(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);
 
@@ -759,9 +870,16 @@ function tickSimulation(): void {
     player.x += player.vx * dt;
     player.y += player.vy * dt;
 
-    if (player.x < -60 || player.x > arena.width + 60 || player.y < -60 || player.y > arena.height + 60) {
-      knockOut(player);
-      continue;
+    const outsideArena =
+      player.x < -60 || player.x > arena.width + 60 || player.y < -60 || player.y > arena.height + 60;
+    if (outsideArena) {
+      if (player.spawnProtectedUntil <= now) {
+        knockOut(player);
+        continue;
+      }
+      // Spawn-Schutz verzeiht aggressive Positionen kurz nach dem Respawn.
+      player.vx *= 0.35;
+      player.vy *= 0.35;
     }
 
     player.x = clamp(player.x, player.radius, arena.width - player.radius);
@@ -769,10 +887,13 @@ function tickSimulation(): void {
 
   }
 
-  resolveConsumptions(activePlayers);
+  resolveConsumptions(activePlayers, now);
 
   for (const player of activePlayers) {
     if (!player.alive) {
+      continue;
+    }
+    if (player.spawnProtectedUntil > now) {
       continue;
     }
     if (isInHazard(player)) {
