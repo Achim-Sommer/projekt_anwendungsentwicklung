@@ -13,8 +13,8 @@ import type {
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
-const TICK_RATE = 24;
-const SNAPSHOT_RATE = 10;
+const TICK_RATE = 60;
+const SNAPSHOT_RATE = 30;
 const DT = 1 / TICK_RATE;
 
 const PLAYER_START_MASS = 20;
