@@ -38,8 +38,6 @@ export interface PlayerSnapshot {
   radius: number;
   color: number;
   mass: number;
-  charge: number;
-  chargeMax: number;
   score: number;
   isBot: boolean;
   alive: boolean;
@@ -68,9 +66,6 @@ export interface PlayerInputPayload {
   down: boolean;
   left: boolean;
   right: boolean;
-  charge: boolean;
-  aimX: number;
-  aimY: number;
 }
 
 export interface ServerToClientEvents {

@@ -14,21 +14,13 @@ import type {
 
 const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 60;
-const SNAPSHOT_RATE = 30;
+const SNAPSHOT_RATE = 40;
 const DT = 1 / TICK_RATE;
 
 const PLAYER_START_MASS = 20;
-const PLAYER_ACCELERATION_BASE = 1700;
-const PLAYER_MAX_SPEED_BASE = 370;
-const PLAYER_DRAG = 0.83;
-const PUSH_RANGE = 175;
-const PUSH_MIN_MASS_RATIO = 1.15;
-const PUSH_CHARGE_MIN = 20;
-const PUSH_FORCE_BASE = 290;
-const PUSH_RECOIL_FACTOR = 0.24;
-const CHARGE_MAX = 100;
-const CHARGE_GAIN_RATE = 126;
-const CHARGE_DECAY_RATE = 30;
+const PLAYER_ACCELERATION_BASE = 1850;
+const PLAYER_MAX_SPEED_BASE = 420;
+const PLAYER_DRAG = 0.92;
 const RESPAWN_TIME_MS = 1800;
 const TARGET_TOTAL_PLAYERS = 4;
 
@@ -75,13 +67,11 @@ interface ServerPlayer {
   radius: number;
   color: number;
   mass: number;
-  charge: number;
   score: number;
   isBot: boolean;
   alive: boolean;
   respawnAt: number;
   lastInput: PlayerInputPayload;
-  lastChargePressed: boolean;
   lastThreatBy?: string;
   aiTargetId?: string;
   aiTargetKind?: "player" | "orb";
@@ -229,12 +219,12 @@ function massToRadius(mass: number): number {
 
 function maxSpeedForMass(mass: number): number {
   const speed = PLAYER_MAX_SPEED_BASE * Math.pow(Math.max(1, mass), -0.25);
-  return clamp(speed, 120, PLAYER_MAX_SPEED_BASE);
+  return clamp(speed, 150, PLAYER_MAX_SPEED_BASE);
 }
 
 function accelerationForMass(mass: number): number {
   const acceleration = PLAYER_ACCELERATION_BASE * Math.pow(Math.max(1, mass), -0.2);
-  return clamp(acceleration, 340, PLAYER_ACCELERATION_BASE);
+  return clamp(acceleration, 420, PLAYER_ACCELERATION_BASE);
 }
 
 function randomSpawn() {
@@ -272,7 +262,6 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     radius: massToRadius(PLAYER_START_MASS),
     color: randomColor(),
     mass: PLAYER_START_MASS,
-    charge: 0,
     score: 0,
     isBot,
     alive: true,
@@ -283,11 +272,7 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
       down: false,
       left: false,
       right: false,
-      charge: false,
-      aimX: spawn.x,
-      aimY: spawn.y,
     },
-    lastChargePressed: false,
     aiDecisionAt: 0,
     aiTickPhase: Math.floor(Math.random() * 3),
   };
@@ -304,8 +289,6 @@ function buildSnapshot(): GameSnapshot {
     radius: player.radius,
     color: player.color,
     mass: player.mass,
-    charge: player.charge,
-    chargeMax: CHARGE_MAX,
     score: player.score,
     isBot: player.isBot,
     alive: player.alive,
@@ -420,11 +403,11 @@ function hazardRepulsion(player: ServerPlayer): { x: number; y: number } {
   return { x: sumX, y: sumY };
 }
 
-function canPush(source: ServerPlayer, target: ServerPlayer): boolean {
+function canConsumeTarget(source: ServerPlayer, target: ServerPlayer): boolean {
   if (source.id === target.id || !source.alive || !target.alive) {
     return false;
   }
-  return source.mass / Math.max(1, target.mass) >= PUSH_MIN_MASS_RATIO;
+  return source.mass >= target.mass * CONSUME_MIN_RATIO;
 }
 
 function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "consume" = "ringout"): void {
@@ -438,8 +421,6 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   victim.alive = false;
   victim.vx = 0;
   victim.vy = 0;
-  victim.charge = 0;
-  victim.lastChargePressed = false;
   victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
 
   applyMass(victim, -Math.max(2, victim.mass * 0.18));
@@ -511,9 +492,7 @@ function handleRespawns(now: number): void {
     player.vx = 0;
     player.vy = 0;
     player.alive = true;
-    player.charge = 0;
     player.lastThreatBy = undefined;
-    player.lastChargePressed = false;
   }
 }
 
@@ -575,75 +554,6 @@ function collectOrbs(playersList: ServerPlayer[]): void {
   }
 }
 
-function findPushTarget(source: ServerPlayer, candidates: ServerPlayer[]): ServerPlayer | undefined {
-  const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
-  if (aim.length < 0.0001) {
-    return undefined;
-  }
-
-  let bestScore = 0;
-  let bestTarget: ServerPlayer | undefined;
-
-  for (const target of candidates) {
-    if (!canPush(source, target)) {
-      continue;
-    }
-
-    const dir = normalize(target.x - source.x, target.y - source.y);
-    const cone = dir.x * aim.x + dir.y * aim.y;
-    if (cone < 0.55) {
-      continue;
-    }
-
-    const distanceCap = PUSH_RANGE + source.radius + target.radius;
-    if (dir.length > distanceCap) {
-      continue;
-    }
-
-    const distanceWeight = 1 - dir.length / distanceCap;
-    const score = cone * 0.65 + distanceWeight * 0.35;
-    if (!bestTarget || score > bestScore) {
-      bestScore = score;
-      bestTarget = target;
-    }
-  }
-
-  return bestTarget;
-}
-
-function executePush(source: ServerPlayer, releasedCharge: number, candidates: ServerPlayer[]): void {
-  if (releasedCharge < PUSH_CHARGE_MIN) {
-    return;
-  }
-
-  const target = findPushTarget(source, candidates);
-  if (!target) {
-    return;
-  }
-
-  const aim = normalize(source.lastInput.aimX - source.x, source.lastInput.aimY - source.y);
-  const massAdvantage = Math.pow(clamp(source.mass / Math.max(1, target.mass), 1, 3), 0.35);
-  const chargeRatio = clamp(releasedCharge / CHARGE_MAX, 0, 1);
-  const chargePower = Math.pow(chargeRatio, 1.22);
-  const sourceMassFactor = clamp(Math.pow(source.mass / PLAYER_START_MASS, 0.28), 1, 2.35);
-  const targetResistance = clamp(Math.pow(Math.max(1, target.mass) / Math.max(1, source.mass), 0.2), 0.72, 1.35);
-  const deltaV =
-    PUSH_FORCE_BASE *
-    (0.45 + chargePower * 1.95) *
-    massAdvantage *
-    sourceMassFactor /
-    targetResistance;
-
-  target.vx += aim.x * deltaV;
-  target.vy += aim.y * deltaV;
-
-  const recoil = deltaV * PUSH_RECOIL_FACTOR * clamp(target.mass / Math.max(1, source.mass), 0.3, 1.3);
-  source.vx -= aim.x * recoil;
-  source.vy -= aim.y * recoil;
-
-  target.lastThreatBy = source.id;
-}
-
 function runAi(now: number): void {
   const list = Array.from(players.values());
   const orbs = Array.from(pickups.values());
@@ -678,7 +588,7 @@ function runAi(now: number): void {
       let targetPlayer: ServerPlayer | undefined;
       let targetPlayerDistSq = Number.POSITIVE_INFINITY;
       for (const candidate of list) {
-        if (candidate.id === bot.id || !candidate.alive || !canPush(bot, candidate)) {
+        if (candidate.id === bot.id || !candidate.alive || !canConsumeTarget(bot, candidate)) {
           continue;
         }
         const dx = candidate.x - bot.x;
@@ -723,7 +633,6 @@ function runAi(now: number): void {
 
     let targetX = arenaCenter.x;
     let targetY = arenaCenter.y;
-    let charge = false;
 
     if (bot.aiTargetKind === "player" && bot.aiTargetId) {
       const target = players.get(bot.aiTargetId);
@@ -737,34 +646,12 @@ function runAi(now: number): void {
 
         targetX = trapPoint.x;
         targetY = trapPoint.y;
-
-        const toTarget = normalize(target.x - bot.x, target.y - bot.y);
-        const toHazard = normalize(hazard.x - target.x, hazard.y - target.y);
-        const alignment = clamp(toTarget.x * toHazard.x + toTarget.y * toHazard.y, -1, 1);
-        const dx = target.x - bot.x;
-        const dy = target.y - bot.y;
-        const distSq = dx * dx + dy * dy;
-
-        bot.lastInput.aimX = target.x;
-        bot.lastInput.aimY = target.y;
-
-        if (canPush(bot, target)) {
-          if (bot.charge < 62 || distSq > 195 * 195) {
-            charge = true;
-          } else if (alignment > 0.8 && distSq < 210 * 210) {
-            charge = false;
-          } else {
-            charge = true;
-          }
-        }
       }
     } else if (bot.aiTargetKind === "orb" && bot.aiTargetId) {
       const orb = pickups.get(bot.aiTargetId);
       if (orb) {
         targetX = orb.x;
         targetY = orb.y;
-        bot.lastInput.aimX = orb.x;
-        bot.lastInput.aimY = orb.y;
       }
     }
 
@@ -801,9 +688,6 @@ function runAi(now: number): void {
       down: move.y > 0.2,
       left: move.x < -0.2,
       right: move.x > 0.2,
-      charge,
-      aimX: bot.lastInput.aimX || targetX,
-      aimY: bot.lastInput.aimY || targetY,
     };
   }
 }
@@ -867,22 +751,6 @@ function tickSimulation(): void {
       player.vx *= scaled;
       player.vy *= scaled;
     }
-
-    const isCharging = Boolean(input.charge);
-    const releasedCharge = !isCharging && player.lastChargePressed ? player.charge : 0;
-
-    if (isCharging) {
-      player.charge = clamp(player.charge + CHARGE_GAIN_RATE * dt, 0, CHARGE_MAX);
-    } else {
-      player.charge = clamp(player.charge - CHARGE_DECAY_RATE * dt, 0, CHARGE_MAX);
-    }
-
-    if (releasedCharge >= PUSH_CHARGE_MIN) {
-      executePush(player, releasedCharge, activePlayers);
-      player.charge = 0;
-    }
-
-    player.lastChargePressed = isCharging;
   }
 
   collectOrbs(activePlayers);

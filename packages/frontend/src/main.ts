@@ -46,6 +46,18 @@ const nameInputElement = nameInput;
 const nameErrorElement = nameError;
 const startButtonElement = startButton;
 
+const hudStatus = document.getElementById("hud-status") as HTMLDivElement | null;
+const hudPlayer = document.getElementById("hud-player") as HTMLDivElement | null;
+const hudScoreboard = document.getElementById("hud-scoreboard") as HTMLPreElement | null;
+
+if (!hudStatus || !hudPlayer || !hudScoreboard) {
+  throw new Error("HUD elements are missing in index.html.");
+}
+
+const hudStatusElement = hudStatus;
+const hudPlayerElement = hudPlayer;
+const hudScoreboardElement = hudScoreboard;
+
 let playerName = "";
 
 const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(SERVER_URL, {
@@ -109,18 +121,11 @@ socket.on("connect_error", (error) => {
 });
 
 class GameScene extends Phaser.Scene {
-  private hudPanel!: Phaser.GameObjects.Graphics;
-  private statusText!: Phaser.GameObjects.Text;
-  private hudText!: Phaser.GameObjects.Text;
-  private scoreText!: Phaser.GameObjects.Text;
-  private controlsTitle!: Phaser.GameObjects.Text;
-  private controlsText!: Phaser.GameObjects.Text;
   private arenaGraphics!: Phaser.GameObjects.Graphics;
   private hazardGraphics!: Phaser.GameObjects.Graphics;
   private decorGraphics!: Phaser.GameObjects.Graphics;
   private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
-  private aimLine!: Phaser.GameObjects.Graphics;
   private cameraTarget!: Phaser.GameObjects.Zone;
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
@@ -134,7 +139,6 @@ class GameScene extends Phaser.Scene {
   private lastInputSentAt = 0;
   private hudCompact = false;
   private leaderboardLines = 8;
-  private readonly alwaysVisibleScoreboard = true;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -144,7 +148,6 @@ class GameScene extends Phaser.Scene {
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
-  private chargePressed = false;
 
   private readonly onConnect: () => void;
   private readonly onDisconnect: () => void;
@@ -162,7 +165,6 @@ class GameScene extends Phaser.Scene {
     this.onConnect = () => this.updateStatus();
     this.onDisconnect = () => {
       this.updateStatus();
-      this.aimLine.clear();
     };
     this.onConnectError = () => {
       this.updateStatus();
@@ -197,59 +199,13 @@ class GameScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor(0x111827);
     this.cameras.main.roundPixels = true;
 
-    this.hudPanel = this.add.graphics().setDepth(19).setScrollFactor(0);
     this.arenaGraphics = this.add.graphics();
     this.hazardGraphics = this.add.graphics();
     this.decorGraphics = this.add.graphics();
     this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
-    this.aimLine = this.add.graphics();
     this.cameraTarget = this.add.zone(0, 0, 1, 1);
-
-    this.statusText = this.add
-      .text(0, 0, "Bitte Namen eingeben…", {
-        fontSize: "16px",
-        color: "#ffffff",
-      })
-      .setDepth(20)
-      .setScrollFactor(0);
-
-    this.hudText = this.add
-      .text(0, 0, "", {
-        fontSize: "14px",
-        color: "#a7f3d0",
-      })
-      .setDepth(20)
-      .setScrollFactor(0);
-
-    this.scoreText = this.add
-      .text(0, 0, "", {
-        fontSize: "13px",
-        color: "#f8fafc",
-        fontFamily: "Consolas, 'Courier New', monospace",
-      })
-      .setDepth(20)
-      .setScrollFactor(0);
-
-    this.controlsTitle = this.add
-      .text(0, 0, "", {
-        fontSize: "12px",
-        color: "#93c5fd",
-      })
-      .setDepth(20)
-      .setScrollFactor(0);
-
-    this.controlsText = this.add
-      .text(0, 0, "", {
-        fontSize: "11px",
-        color: "#cbd5e1",
-        lineSpacing: 4,
-      })
-      .setDepth(20)
-      .setScrollFactor(0);
-
-    this.layoutHud();
-    this.renderHudPanel();
+    this.updateHudDensity();
 
     const keyboard = this.input.keyboard;
     if (!keyboard) {
@@ -269,25 +225,15 @@ class GameScene extends Phaser.Scene {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.pointerWorld.set(worldPoint.x, worldPoint.y);
     });
-    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      if (pointer.button === 0) {
-        this.chargePressed = true;
-      }
-    });
-    this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      if (pointer.button === 0) {
-        this.chargePressed = false;
-      }
-    });
 
     this.scale.on("resize", () => {
-      this.layoutHud();
-      this.renderHudPanel();
+      this.updateHudDensity();
       this.updateHud();
     });
     window.addEventListener("resize", this.handleWindowResize);
 
     this.updateStatus();
+    this.updateHud();
 
     const camera = this.cameras.main;
     camera.startFollow(this.cameraTarget, true, 0.12, 0.12);
@@ -318,12 +264,9 @@ class GameScene extends Phaser.Scene {
       down: moveInput.down,
       left: moveInput.left,
       right: moveInput.right,
-      charge: this.chargePressed,
-      aimX: this.pointerWorld.x || player.x,
-      aimY: this.pointerWorld.y || player.y,
     };
 
-    if (this.time.now - this.lastInputSentAt >= 33) {
+    if (this.time.now - this.lastInputSentAt >= 16) {
       socket.emit("input", payload);
       this.lastInputSentAt = this.time.now;
     }
@@ -331,7 +274,6 @@ class GameScene extends Phaser.Scene {
     this.updateRenderPlayers();
     this.updateCamera(player);
     this.drawPlayers();
-    this.drawAim(player, payload);
   }
 
   private getMovementInput(player: PlayerSnapshot): {
@@ -347,7 +289,7 @@ class GameScene extends Phaser.Scene {
     const dx = this.pointerWorld.x - px;
     const dy = this.pointerWorld.y - py;
     const distance = Math.hypot(dx, dy);
-    const deadzone = Math.max(24, player.radius * 1.6);
+    const deadzone = Math.max(16, player.radius * 1.15);
 
     const keyboardActive =
       this.keys.up.isDown || this.keys.down.isDown || this.keys.left.isDown || this.keys.right.isDown;
@@ -444,11 +386,11 @@ class GameScene extends Phaser.Scene {
       state.x += state.vx * dt;
       state.y += state.vy * dt;
 
-      const blend = clamp(0.2 + dt * 6.5, 0.2, 0.48);
+      const blend = clamp(0.3 + dt * 7.5, 0.3, 0.62);
       state.x = Phaser.Math.Linear(state.x, player.x, blend);
       state.y = Phaser.Math.Linear(state.y, player.y, blend);
-      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.38);
-      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.38);
+      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.52);
+      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.52);
 
       const errorX = player.x - state.x;
       const errorY = player.y - state.y;
@@ -494,73 +436,10 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private layoutHud(): void {
-    const { panelX, panelY, panelWidth, compact, ultraCompact } = this.getHudLayout();
-
-    this.statusText.setPosition(12, 10);
-    this.hudText.setPosition(12, 30);
-    this.scoreText.setPosition(panelX + 10, panelY + 10);
-
-    this.statusText.setFontSize(ultraCompact ? 10 : 13);
-    this.hudText.setFontSize(ultraCompact ? 10 : 12);
-    this.scoreText.setFontSize(this.alwaysVisibleScoreboard ? 13 : compact ? 11 : 13);
-    this.scoreText.setWordWrapWidth(panelWidth - 20, true);
-    this.scoreText.setVisible(true);
-
-    // Controls-Text ausblenden: Agar.io-like UI ist deutlich cleaner.
-    this.controlsTitle.setVisible(false);
-    this.controlsText.setVisible(false);
-  }
-
-  private renderHudPanel(): void {
-    const { panelWidth, panelX, panelHeight, panelY, compact } = this.getHudLayout();
-    this.hudCompact = compact;
-
-    this.hudPanel.clear();
-    this.hudPanel.fillStyle(0x0b1120, 0.72);
-    this.hudPanel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
-    this.hudPanel.lineStyle(1.5, 0x38bdf8, 0.42);
-    this.hudPanel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 14);
-    this.hudPanel.lineStyle(1, 0x94a3b8, 0.22);
-    this.hudPanel.lineBetween(panelX + 10, panelY + 42, panelX + panelWidth - 10, panelY + 42);
-  }
-
-  private getHudLayout(): {
-    panelWidth: number;
-    panelX: number;
-    panelHeight: number;
-    panelY: number;
-    compact: boolean;
-    ultraCompact: boolean;
-  } {
-    const margin = this.scale.width < 620 ? 8 : 12;
-    const narrow = this.scale.width < 960;
+  private updateHudDensity(): void {
     const ultraCompact = this.scale.width < 720 || this.scale.height < 520;
-    const panelWidth = this.alwaysVisibleScoreboard
-      ? narrow
-        ? Math.min(320, Math.max(240, this.scale.width - margin * 2))
-        : this.scale.width >= 2200
-          ? 420
-          : this.scale.width >= 1600
-            ? 380
-            : Math.min(340, Math.max(260, this.scale.width - margin * 2))
-      : narrow
-        ? Math.min(280, Math.max(180, this.scale.width - margin * 2))
-        : this.scale.width >= 2200
-          ? 380
-          : this.scale.width >= 1600
-            ? 340
-            : Math.min(300, Math.max(220, this.scale.width - margin * 2));
-    const panelX = narrow ? margin : Math.max(margin, this.scale.width - panelWidth - margin);
-    const compact = this.scale.height < 760 || this.scale.width < 1180;
-    if (this.alwaysVisibleScoreboard) {
-      this.leaderboardLines = 8;
-    } else {
-      this.leaderboardLines = ultraCompact ? 4 : compact ? 5 : 6;
-    }
-    const panelHeight = this.alwaysVisibleScoreboard ? Math.min(232, this.scale.height - margin * 2) : ultraCompact ? 112 : compact ? 144 : 176;
-    const panelY = margin;
-    return { panelWidth, panelX, panelHeight, panelY, compact, ultraCompact };
+    this.hudCompact = this.scale.height < 760 || this.scale.width < 1180;
+    this.leaderboardLines = ultraCompact ? 6 : this.hudCompact ? 8 : 10;
   }
 
   private drawArena(): void {
@@ -778,42 +657,16 @@ class GameScene extends Phaser.Scene {
       visiblePlayers.push(player);
     }
 
-    const crowdedView = visiblePlayers.length >= 14;
-    const veryCrowdedView = visiblePlayers.length >= 22;
     const showNameLabels = visiblePlayers.length <= 28;
 
     for (const player of visiblePlayers) {
-
-      const isLocal = player.id === this.localPlayerId;
       this.playerGraphics.fillStyle(player.color, 1);
       const render = this.renderPlayers.get(player.id);
       const px = render?.x ?? player.x;
       const py = render?.y ?? player.y;
 
+      // Agar.io-aehnlicher Look: ein einzelner Kreis, der mit der Masse waechst.
       this.playerGraphics.fillCircle(px, py, player.radius);
-
-      const strokeWidth = isLocal ? 4 : crowdedView ? 1 : 2;
-      this.playerGraphics.lineStyle(strokeWidth, isLocal ? 0xffffff : 0x111827, 0.9);
-      this.playerGraphics.strokeCircle(px, py, player.radius + (isLocal ? 3 : 1));
-
-      if (!veryCrowdedView || isLocal) {
-        const energyWidth = 36;
-        const ratio = Phaser.Math.Clamp(player.charge / Math.max(1, player.chargeMax), 0, 1);
-        this.playerGraphics.fillStyle(0x111827, 0.8);
-        this.playerGraphics.fillRect(px - energyWidth / 2, py - 30, energyWidth, 5);
-        this.playerGraphics.fillStyle(0x22d3ee, 0.95);
-        this.playerGraphics.fillRect(
-          px - energyWidth / 2,
-          py - 30,
-          energyWidth * ratio,
-          5
-        );
-      }
-
-      if (!crowdedView || isLocal) {
-        this.playerGraphics.fillStyle(0xfacc15, 0.95);
-        this.playerGraphics.fillCircle(px, py, Math.max(2, player.mass * 0.06));
-      }
 
       let label = this.nameLabels.get(player.id);
       if (!label) {
@@ -828,7 +681,7 @@ class GameScene extends Phaser.Scene {
       }
 
       label.setPosition(px, py - 42);
-      label.setVisible(showNameLabels || isLocal);
+      label.setVisible(showNameLabels || player.id === this.localPlayerId);
       const labelText = `${player.name}${player.isBot ? " 🤖" : ""}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
@@ -854,33 +707,16 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private drawAim(player: PlayerSnapshot, input: PlayerInputPayload): void {
-    this.aimLine.clear();
-    const color = input.charge ? 0xf97316 : 0x94a3b8;
-    const render = this.renderPlayers.get(player.id);
-    const px = render?.x ?? player.x;
-    const py = render?.y ?? player.y;
-    this.aimLine.lineStyle(2, color, 0.85);
-    this.aimLine.beginPath();
-    this.aimLine.moveTo(px, py);
-    this.aimLine.lineTo(input.aimX, input.aimY);
-    this.aimLine.strokePath();
-  }
-
   private getLocalPlayer(): PlayerSnapshot | undefined {
     return this.snapshot?.players.find((player) => player.id === this.localPlayerId);
   }
 
   private updateHud(): void {
-    this.scoreText.setVisible(true);
-
     const local = this.getLocalPlayer();
     if (local) {
-      this.hudText.setText(
-        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}`
-      );
+      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}`;
     } else {
-      this.hudText.setText("Warte auf Spawn…");
+      hudPlayerElement.textContent = "Warte auf Spawn…";
     }
 
     const ranking = [...(this.snapshot?.players ?? [])]
@@ -894,15 +730,14 @@ class GameScene extends Phaser.Scene {
       })
       .join("\n");
 
-    this.scoreText.setText(ranking || "• Noch keine Punkte");
-    this.scoreText.setAlign("left");
+    hudScoreboardElement.textContent = ranking || "• Noch keine Punkte";
   }
 
   private updateStatus(): void {
     if (socket.connected) {
-      this.statusText.setText(`Online als ${playerName || "Spieler"}`);
+      hudStatusElement.textContent = `Online als ${playerName || "Spieler"}`;
     } else {
-      this.statusText.setText("Warte auf Lobby-Start…");
+      hudStatusElement.textContent = "Warte auf Lobby-Start…";
     }
   }
 
@@ -937,8 +772,8 @@ const config: Phaser.Types.Core.GameConfig = {
   antialias: false,
   powerPreference: "high-performance",
   fps: {
-    target: 50,
-    min: 24,
+    target: 60,
+    min: 30,
   },
   scene: [GameScene],
   parent: document.body,
