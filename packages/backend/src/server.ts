@@ -24,10 +24,11 @@ const STREAM_PICKUP_RADIUS = 1120;
 const STREAM_FULL_RESYNC_MS = 8000;
 
 const PLAYER_START_MASS = 10;
-const PLAYER_ACCELERATION_BASE = 1850;
-const PLAYER_MAX_SPEED_BASE = 420;
+const PLAYER_ACCELERATION_BASE = 1700;
+const PLAYER_MAX_SPEED_BASE = 370;
 const PLAYER_DRAG = 0.92;
-const SPEED_BOOST_MULTIPLIER = 1.5;
+const SPEED_BOOST_MULTIPLIER = 1.22;
+const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.1;
 const RESPAWN_TIME_MS = 1800;
 const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
@@ -40,15 +41,15 @@ const ORB_MAX_COUNT = 140;
 const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 8;
 const ORB_VALUE_MAX = 14;
-const SPECIAL_PICKUP_CHANCE = 0.12;
+const SPECIAL_PICKUP_CHANCE = 0.07;
 const SPECIAL_PICKUP_RADIUS = 9;
-const SPECIAL_SPEED_DURATION_MS = 7000;
+const SPECIAL_SPEED_DURATION_MS = 5000;
 const SPECIAL_SHIELD_DURATION_MS = 5500;
 const SPECIAL_STEALTH_DURATION_MS = 6500;
 const KILL_MASS_BONUS = 20;
 const CONSUME_MIN_RATIO = 1.22;
 const CONSUME_MASS_GAIN = 0.42;
-const PASSIVE_MASS_GAIN_PER_SEC = 0.9;
+const PASSIVE_MASS_GAIN_PER_SEC = 0.55;
 const HAZARD_DEATH_OVERLAP_RATIO = 0.55;
 const HAZARD_DEATH_OVERLAP_MIN = 10;
 const HAZARD_DEATH_OVERLAP_MAX = 24;
@@ -249,12 +250,12 @@ function massToRadius(mass: number): number {
 
 function maxSpeedForMass(mass: number): number {
   const speed = PLAYER_MAX_SPEED_BASE * Math.pow(Math.max(1, mass), -0.25);
-  return clamp(speed, 150, PLAYER_MAX_SPEED_BASE);
+  return clamp(speed, 120, PLAYER_MAX_SPEED_BASE);
 }
 
 function accelerationForMass(mass: number): number {
   const acceleration = PLAYER_ACCELERATION_BASE * Math.pow(Math.max(1, mass), -0.2);
-  return clamp(acceleration, 420, PLAYER_ACCELERATION_BASE);
+  return clamp(acceleration, 340, PLAYER_ACCELERATION_BASE);
 }
 
 function randomSpawn() {
@@ -1151,7 +1152,7 @@ function tickSimulation(): void {
     const direction = normalize(inputX, inputY);
     const speedBoostActive = hasSpeedBoost(player, now);
     const acceleration = accelerationForMass(player.mass) * (speedBoostActive ? SPEED_BOOST_MULTIPLIER : 1);
-    const maxSpeed = maxSpeedForMass(player.mass) * (speedBoostActive ? 1.22 : 1);
+    const maxSpeed = maxSpeedForMass(player.mass) * (speedBoostActive ? SPEED_BOOST_TOP_SPEED_MULTIPLIER : 1);
 
     player.vx += direction.x * acceleration * dt;
     player.vy += direction.y * acceleration * dt;

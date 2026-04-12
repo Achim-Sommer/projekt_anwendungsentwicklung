@@ -141,6 +141,7 @@ class GameScene extends Phaser.Scene {
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
   private lastLabelText = new Map<string, string>();
+  private lastLabelAppearance = new Map<string, string>();
   private snapshotPlayers = new Map<string, PlayerSnapshot>();
   private snapshotPickups = new Map<string, ForceOrb>();
 
@@ -432,11 +433,11 @@ class GameScene extends Phaser.Scene {
       state.x += state.vx * dt;
       state.y += state.vy * dt;
 
-      const blend = clamp(0.3 + dt * 7.5, 0.3, 0.62);
+      const blend = clamp(0.24 + dt * 6.2, 0.24, 0.5);
       state.x = Phaser.Math.Linear(state.x, player.x, blend);
       state.y = Phaser.Math.Linear(state.y, player.y, blend);
-      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.52);
-      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.52);
+      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.42);
+      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.42);
 
       const errorX = player.x - state.x;
       const errorY = player.y - state.y;
@@ -736,19 +737,53 @@ class GameScene extends Phaser.Scene {
       if (!label) {
         label = this.add
           .text(px, py - 42, "", {
-            fontSize: "11px",
-            color: "#ffffff",
+            fontFamily: "Trebuchet MS, Verdana, sans-serif",
+            fontSize: "12px",
+            fontStyle: "bold",
+            color: "#f8fafc",
+            stroke: "#0f172a",
+            strokeThickness: 2,
+            backgroundColor: "#0f172acc",
+            padding: { left: 8, right: 8, top: 3, bottom: 3 },
           })
           .setOrigin(0.5)
           .setDepth(5);
+        label.setShadow(0, 1, "#020617aa", 4, false, true);
         this.nameLabels.set(player.id, label);
       }
 
-      label.setPosition(px, py - 42);
+      const labelOffsetY = Math.max(22, player.radius + 15);
+      label.setPosition(px, py - labelOffsetY);
       label.setVisible(showNameLabels || player.id === this.localPlayerId);
       const shieldMarker = hasSpawnProtection ? " 🛡" : "";
       const invulnMarker = player.invulnerableMsLeft > 0 ? " ⛨" : "";
       const stealthMarker = player.stealthMsLeft > 0 ? " 👁" : "";
+      const isLocalPlayer = player.id === this.localPlayerId;
+      const appearanceKey = [
+        isLocalPlayer ? "local" : "remote",
+        player.isBot ? "bot" : "human",
+        hasSpawnProtection ? "spawn" : "-",
+        player.invulnerableMsLeft > 0 ? "invuln" : "-",
+        player.stealthMsLeft > 0 ? "stealth" : "-",
+      ].join("|");
+      if (this.lastLabelAppearance.get(player.id) !== appearanceKey) {
+        const backgroundColor = isLocalPlayer
+          ? "#0ea5e9cf"
+          : player.isBot
+            ? "#334155cf"
+            : "#0f172ac9";
+        const borderColor = hasSpawnProtection || player.invulnerableMsLeft > 0
+          ? "#86efac"
+          : player.stealthMsLeft > 0
+            ? "#c4b5fd"
+            : "#e2e8f0";
+        const textColor = isLocalPlayer ? "#ecfeff" : "#f8fafc";
+        label.setBackgroundColor(backgroundColor);
+        label.setColor(textColor);
+        label.setStroke(borderColor, 2);
+        this.lastLabelAppearance.set(player.id, appearanceKey);
+      }
+
       const labelText = `${player.name}${player.isBot ? " 🤖" : ""}${shieldMarker}${invulnMarker}${stealthMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
@@ -768,6 +803,7 @@ class GameScene extends Phaser.Scene {
         label.destroy();
         this.nameLabels.delete(playerId);
         this.lastLabelText.delete(playerId);
+        this.lastLabelAppearance.delete(playerId);
       } else if (!showNameLabels && playerId !== this.localPlayerId) {
         label.setVisible(false);
       }
@@ -846,6 +882,7 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
+    this.lastLabelAppearance.clear();
     window.removeEventListener("resize", this.handleWindowResize);
   }
 }
