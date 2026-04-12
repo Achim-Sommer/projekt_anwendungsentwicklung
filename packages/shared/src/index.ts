@@ -48,13 +48,13 @@ export interface PlayerSnapshot {
 export interface GameSnapshot {
   tick: number;
   serverTime: number;
-  arena: ArenaState;
   players: PlayerSnapshot[];
   pickups: ForceOrb[];
 }
 
 export interface WelcomePayload {
   yourId: string;
+  arena: ArenaState;
   snapshot: GameSnapshot;
 }
 

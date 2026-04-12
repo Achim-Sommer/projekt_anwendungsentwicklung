@@ -47,6 +47,7 @@ const HAZARD_DEATH_OVERLAP_MAX = 24;
 const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
 const AI_SEPARATION_RADIUS = 170;
+const AI_SEPARATION_RADIUS_SQ = AI_SEPARATION_RADIUS * AI_SEPARATION_RADIUS;
 
 const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
 const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
@@ -85,6 +86,7 @@ interface ServerPlayer {
   aiTargetId?: string;
   aiTargetKind?: "player" | "orb";
   aiDecisionAt: number;
+  aiTickPhase: number;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -178,6 +180,27 @@ const arena: ArenaState = {
   ],
 };
 
+// --- Spatial grid for orb lookups ---
+const GRID_CELL = 100;
+const GRID_COLS = Math.ceil(arena.width / GRID_CELL);
+const GRID_ROWS = Math.ceil(arena.height / GRID_CELL);
+const orbGrid: Set<string>[] = [];
+for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) orbGrid.push(new Set());
+
+function orbGridIndex(x: number, y: number): number {
+  const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(x / GRID_CELL)));
+  const row = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(y / GRID_CELL)));
+  return row * GRID_COLS + col;
+}
+
+function orbGridInsert(orb: ForceOrb): void {
+  orbGrid[orbGridIndex(orb.x, orb.y)].add(orb.id);
+}
+
+function orbGridRemove(orb: ForceOrb): void {
+  orbGrid[orbGridIndex(orb.x, orb.y)].delete(orb.id);
+}
+
 const players = new Map<string, ServerPlayer>();
 const pickups = new Map<string, ForceOrb>();
 
@@ -186,6 +209,7 @@ let lastSnapshotAt = 0;
 let botCounter = 1;
 let orbCounter = 1;
 let lastOrbSpawnAt = 0;
+let lastTickMs = Date.now();
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -265,6 +289,7 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     },
     lastChargePressed: false,
     aiDecisionAt: 0,
+    aiTickPhase: Math.floor(Math.random() * 3),
   };
 }
 
@@ -289,7 +314,6 @@ function buildSnapshot(): GameSnapshot {
   return {
     tick,
     serverTime: Date.now(),
-    arena,
     players: playerSnapshots,
     pickups: Array.from(pickups.values()),
   };
@@ -301,17 +325,19 @@ function applyMass(player: ServerPlayer, amount: number): void {
 }
 
 function isInHazard(player: ServerPlayer): boolean {
+  const radiusSq = player.radius * player.radius;
   return arena.hazards.some((hazard) => {
     const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
     const nearestY = clamp(player.y, hazard.y, hazard.y + hazard.height);
     const dx = player.x - nearestX;
     const dy = player.y - nearestY;
-    const distance = Math.hypot(dx, dy);
+    const distSq = dx * dx + dy * dy;
 
-    if (distance >= player.radius) {
+    if (distSq >= radiusSq) {
       return false;
     }
 
+    const distance = Math.sqrt(distSq);
     const overlapDepth = player.radius - distance;
     const requiredDepth = clamp(
       player.radius * HAZARD_DEATH_OVERLAP_RATIO,
@@ -338,14 +364,16 @@ function hazardCenter(hazard: ArenaState["hazards"][number]): { x: number; y: nu
 
 function nearestHazardCenter(target: ServerPlayer): { x: number; y: number } {
   let best = hazardCenter(arena.hazards[0]);
-  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestDistSq = Number.POSITIVE_INFINITY;
 
   for (const hazard of arena.hazards) {
     const center = hazardCenter(hazard);
-    const distance = Math.hypot(center.x - target.x, center.y - target.y);
-    if (distance < bestDistance) {
+    const dx = center.x - target.x;
+    const dy = center.y - target.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq < bestDistSq) {
       best = center;
-      bestDistance = distance;
+      bestDistSq = distSq;
     }
   }
 
@@ -368,24 +396,25 @@ function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
 function hazardRepulsion(player: ServerPlayer): { x: number; y: number } {
   let sumX = 0;
   let sumY = 0;
+  const avoidRange = 140;
+  const avoidRangeSq = avoidRange * avoidRange;
 
   for (const hazard of arena.hazards) {
     const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
     const nearestY = clamp(player.y, hazard.y, hazard.y + hazard.height);
     const dx = player.x - nearestX;
     const dy = player.y - nearestY;
-    const distance = Math.hypot(dx, dy);
-    const avoidRange = 140;
+    const distSq = dx * dx + dy * dy;
 
-    if (distance >= avoidRange || distance < 0.0001) {
+    if (distSq >= avoidRangeSq || distSq < 0.00000001) {
       continue;
     }
 
+    const distance = Math.sqrt(distSq);
     const push = 1 - distance / avoidRange;
-    const n = normalize(dx, dy);
     const weight = push * push;
-    sumX += n.x * weight;
-    sumY += n.y * weight;
+    sumX += (dx / distance) * weight;
+    sumY += (dy / distance) * weight;
   }
 
   return { x: sumX, y: sumY };
@@ -501,33 +530,47 @@ function spawnOrb(now: number): void {
   }
 
   const id = `orb-${orbCounter++}`;
-  pickups.set(id, {
+  const orb: ForceOrb = {
     id,
     x: spawn.x,
     y: spawn.y,
     radius: ORB_RADIUS,
     value: ORB_VALUE_MIN + Math.floor(Math.random() * (ORB_VALUE_MAX - ORB_VALUE_MIN + 1)),
-  });
+  };
+  pickups.set(id, orb);
+  orbGridInsert(orb);
   lastOrbSpawnAt = now;
 }
 
 function collectOrbs(playersList: ServerPlayer[]): void {
   for (const player of playersList) {
-    for (const [orbId, orb] of pickups) {
-      const dx = player.x - orb.x;
-      const dy = player.y - orb.y;
-      const pickupDistance = player.radius + orb.radius;
-      if (Math.abs(dx) > pickupDistance || Math.abs(dy) > pickupDistance) {
-        continue;
-      }
-      if (dx * dx + dy * dy > pickupDistance * pickupDistance) {
-        continue;
-      }
+    const pickupDist = player.radius + ORB_RADIUS;
+    const pickupDistSq = pickupDist * pickupDist;
+    const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(player.x / GRID_CELL)));
+    const row = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(player.y / GRID_CELL)));
+    const range = Math.ceil(pickupDist / GRID_CELL) + 1;
 
-      const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
-      applyMass(player, orb.value * catchUpBonus);
-      player.score += Math.max(1, Math.round(orb.value * 1.4));
-      pickups.delete(orbId);
+    for (let dr = -range; dr <= range; dr++) {
+      const r = row + dr;
+      if (r < 0 || r >= GRID_ROWS) continue;
+      for (let dc = -range; dc <= range; dc++) {
+        const c = col + dc;
+        if (c < 0 || c >= GRID_COLS) continue;
+        const cell = orbGrid[r * GRID_COLS + c];
+        for (const orbId of cell) {
+          const orb = pickups.get(orbId);
+          if (!orb) { cell.delete(orbId); continue; }
+          const dx = player.x - orb.x;
+          const dy = player.y - orb.y;
+          if (dx * dx + dy * dy > pickupDistSq) continue;
+
+          const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
+          applyMass(player, orb.value * catchUpBonus);
+          player.score += Math.max(1, Math.round(orb.value * 1.4));
+          cell.delete(orbId);
+          pickups.delete(orbId);
+        }
+      }
     }
   }
 }
@@ -611,26 +654,50 @@ function runAi(now: number): void {
       continue;
     }
 
+    // Stagger: each bot only updates on its own tick phase
+    if (tick % 3 !== bot.aiTickPhase) {
+      continue;
+    }
+
+    // Validate cached target — force rethink if target disappeared
+    if (bot.aiTargetKind === "orb" && bot.aiTargetId && !pickups.has(bot.aiTargetId)) {
+      bot.aiTargetId = undefined;
+      bot.aiTargetKind = undefined;
+      bot.aiDecisionAt = 0;
+    }
+    if (bot.aiTargetKind === "player" && bot.aiTargetId) {
+      const cached = players.get(bot.aiTargetId);
+      if (!cached || !cached.alive) {
+        bot.aiTargetId = undefined;
+        bot.aiTargetKind = undefined;
+        bot.aiDecisionAt = 0;
+      }
+    }
+
     if (now >= bot.aiDecisionAt) {
       let targetPlayer: ServerPlayer | undefined;
-      let targetPlayerDistance = Number.POSITIVE_INFINITY;
+      let targetPlayerDistSq = Number.POSITIVE_INFINITY;
       for (const candidate of list) {
         if (candidate.id === bot.id || !candidate.alive || !canPush(bot, candidate)) {
           continue;
         }
-        const distance = Math.hypot(candidate.x - bot.x, candidate.y - bot.y);
-        if (distance < targetPlayerDistance) {
-          targetPlayerDistance = distance;
+        const dx = candidate.x - bot.x;
+        const dy = candidate.y - bot.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < targetPlayerDistSq) {
+          targetPlayerDistSq = distSq;
           targetPlayer = candidate;
         }
       }
 
       let targetOrb: ForceOrb | undefined;
-      let targetOrbDistance = Number.POSITIVE_INFINITY;
+      let targetOrbDistSq = Number.POSITIVE_INFINITY;
       for (const orb of orbs) {
-        const distance = Math.hypot(orb.x - bot.x, orb.y - bot.y);
-        if (distance < targetOrbDistance) {
-          targetOrbDistance = distance;
+        const dx = orb.x - bot.x;
+        const dy = orb.y - bot.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < targetOrbDistSq) {
+          targetOrbDistSq = distSq;
           targetOrb = orb;
         }
       }
@@ -674,15 +741,17 @@ function runAi(now: number): void {
         const toTarget = normalize(target.x - bot.x, target.y - bot.y);
         const toHazard = normalize(hazard.x - target.x, hazard.y - target.y);
         const alignment = clamp(toTarget.x * toHazard.x + toTarget.y * toHazard.y, -1, 1);
-        const distance = Math.hypot(target.x - bot.x, target.y - bot.y);
+        const dx = target.x - bot.x;
+        const dy = target.y - bot.y;
+        const distSq = dx * dx + dy * dy;
 
         bot.lastInput.aimX = target.x;
         bot.lastInput.aimY = target.y;
 
         if (canPush(bot, target)) {
-          if (bot.charge < 62 || distance > 195) {
+          if (bot.charge < 62 || distSq > 195 * 195) {
             charge = true;
-          } else if (alignment > 0.8 && distance < 210) {
+          } else if (alignment > 0.8 && distSq < 210 * 210) {
             charge = false;
           } else {
             charge = true;
@@ -711,10 +780,11 @@ function runAi(now: number): void {
       }
       const ox = bot.x - other.x;
       const oy = bot.y - other.y;
-      const distance = Math.hypot(ox, oy);
-      if (distance < 0.01 || distance > AI_SEPARATION_RADIUS) {
+      const distSq = ox * ox + oy * oy;
+      if (distSq < 0.0001 || distSq > AI_SEPARATION_RADIUS_SQ) {
         continue;
       }
+      const distance = Math.sqrt(distSq);
       const away = 1 - distance / AI_SEPARATION_RADIUS;
       const dir = normalize(ox, oy);
       separationX += dir.x * away * away * (other.isBot ? 1.2 : 0.8);
@@ -760,12 +830,13 @@ function maintainBots(): void {
 function tickSimulation(): void {
   tick += 1;
   const now = Date.now();
+  const dt = Math.min((now - lastTickMs) / 1000, DT * 3);
+  lastTickMs = now;
+  const dragFactor = Math.pow(PLAYER_DRAG, dt / DT);
 
   maintainBots();
   spawnOrb(now);
-  if (tick % 3 === 0) {
-    runAi(now);
-  }
+  runAi(now);
   handleRespawns(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);
@@ -783,15 +854,16 @@ function tickSimulation(): void {
     const acceleration = accelerationForMass(player.mass);
     const maxSpeed = maxSpeedForMass(player.mass);
 
-    player.vx += direction.x * acceleration * DT;
-    player.vy += direction.y * acceleration * DT;
+    player.vx += direction.x * acceleration * dt;
+    player.vy += direction.y * acceleration * dt;
 
-    player.vx *= PLAYER_DRAG;
-    player.vy *= PLAYER_DRAG;
+    player.vx *= dragFactor;
+    player.vy *= dragFactor;
 
-    const speed = Math.hypot(player.vx, player.vy);
-    if (speed > maxSpeed) {
-      const scaled = maxSpeed / speed;
+    const speedSq = player.vx * player.vx + player.vy * player.vy;
+    const maxSpeedSq = maxSpeed * maxSpeed;
+    if (speedSq > maxSpeedSq) {
+      const scaled = maxSpeed / Math.sqrt(speedSq);
       player.vx *= scaled;
       player.vy *= scaled;
     }
@@ -800,9 +872,9 @@ function tickSimulation(): void {
     const releasedCharge = !isCharging && player.lastChargePressed ? player.charge : 0;
 
     if (isCharging) {
-      player.charge = clamp(player.charge + CHARGE_GAIN_RATE * DT, 0, CHARGE_MAX);
+      player.charge = clamp(player.charge + CHARGE_GAIN_RATE * dt, 0, CHARGE_MAX);
     } else {
-      player.charge = clamp(player.charge - CHARGE_DECAY_RATE * DT, 0, CHARGE_MAX);
+      player.charge = clamp(player.charge - CHARGE_DECAY_RATE * dt, 0, CHARGE_MAX);
     }
 
     if (releasedCharge >= PUSH_CHARGE_MIN) {
@@ -816,8 +888,8 @@ function tickSimulation(): void {
   collectOrbs(activePlayers);
 
   for (const player of activePlayers) {
-    player.x += player.vx * DT;
-    player.y += player.vy * DT;
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
 
     if (player.x < -60 || player.x > arena.width + 60 || player.y < -60 || player.y > arena.height + 60) {
       knockOut(player);
@@ -862,6 +934,7 @@ io.on("connection", (socket) => {
 
   socket.emit("welcome", {
     yourId: player.id,
+    arena,
     snapshot: buildSnapshot(),
   });
 

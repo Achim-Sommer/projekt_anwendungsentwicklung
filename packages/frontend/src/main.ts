@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { io, type Socket } from "socket.io-client";
 import type {
+  ArenaState,
   ClientToServerEvents,
   ForceOrb,
   GameSnapshot,
@@ -127,6 +128,7 @@ class GameScene extends Phaser.Scene {
   private lastLabelText = new Map<string, string>();
 
   private snapshot: GameSnapshot | null = null;
+  private arena: ArenaState | null = null;
   private localPlayerId = "";
   private inputSeq = 0;
   private lastInputSentAt = 0;
@@ -149,6 +151,7 @@ class GameScene extends Phaser.Scene {
   private readonly onConnectError: (error: Error) => void;
   private readonly onWelcome: (payload: {
     yourId: string;
+    arena: ArenaState;
     snapshot: GameSnapshot;
   }) => void;
   private readonly onSnapshot: (payload: GameSnapshot) => void;
@@ -166,6 +169,7 @@ class GameScene extends Phaser.Scene {
     };
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
+      this.arena = payload.arena;
       this.snapshot = payload.snapshot;
       this.syncRenderPlayersFromSnapshot(true);
       this.resizeToArena();
@@ -180,7 +184,6 @@ class GameScene extends Phaser.Scene {
       this.snapshot = payload;
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
-      this.drawHazards();
       this.drawPickups();
       this.updateHud();
     };
@@ -460,19 +463,19 @@ class GameScene extends Phaser.Scene {
   }
 
   private resizeToArena(): void {
-    if (!this.snapshot) {
+    if (!this.arena) {
       return;
     }
 
-    const { width, height } = this.snapshot.arena;
+    const { width, height } = this.arena;
     this.fitArenaToViewport(width, height);
   }
 
   private readonly handleWindowResize = (): void => {
-    if (!this.snapshot) {
+    if (!this.arena) {
       return;
     }
-    this.fitArenaToViewport(this.snapshot.arena.width, this.snapshot.arena.height);
+    this.fitArenaToViewport(this.arena.width, this.arena.height);
   };
 
   private fitArenaToViewport(arenaWidth: number, arenaHeight: number): void {
@@ -561,7 +564,7 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawArena(): void {
-    if (!this.snapshot) {
+    if (!this.arena) {
       return;
     }
 
@@ -576,15 +579,15 @@ class GameScene extends Phaser.Scene {
     this.hazardGraphics.clear();
     this.pickupGraphics.clear();
     this.arenaGraphics.fillStyle(0x050814, 1);
-    this.arenaGraphics.fillRect(0, 0, this.snapshot.arena.width, this.snapshot.arena.height);
+    this.arenaGraphics.fillRect(0, 0, this.arena.width, this.arena.height);
     this.arenaGraphics.fillStyle(0x0b1223, 0.9);
-    this.arenaGraphics.fillRoundedRect(10, 10, this.snapshot.arena.width - 20, this.snapshot.arena.height - 20, 24);
+    this.arenaGraphics.fillRoundedRect(10, 10, this.arena.width - 20, this.arena.height - 20, 24);
 
     // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
     const drawFullDecor = this.scale.width >= 1100 && this.scale.height >= 700;
     const tileSize = drawFullDecor ? 72 : 120;
-    for (let y = 24; y < this.snapshot.arena.height - 24; y += tileSize) {
-      for (let x = 24; x < this.snapshot.arena.width - 24; x += tileSize) {
+    for (let y = 24; y < this.arena.height - 24; y += tileSize) {
+      for (let x = 24; x < this.arena.width - 24; x += tileSize) {
         const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
         this.decorGraphics.fillStyle(isAlt ? 0x111f38 : 0x0f1a2f, drawFullDecor ? 0.36 : 0.2);
         this.decorGraphics.fillRoundedRect(x, y, tileSize - 10, tileSize - 10, 8);
@@ -593,25 +596,25 @@ class GameScene extends Phaser.Scene {
 
     if (drawFullDecor) {
       this.decorGraphics.lineStyle(1, 0x1e293b, 0.28);
-      for (let x = 24; x < this.snapshot.arena.width - 20; x += tileSize) {
-        this.decorGraphics.lineBetween(x, 20, x, this.snapshot.arena.height - 20);
+      for (let x = 24; x < this.arena.width - 20; x += tileSize) {
+        this.decorGraphics.lineBetween(x, 20, x, this.arena.height - 20);
       }
-      for (let y = 24; y < this.snapshot.arena.height - 20; y += tileSize) {
-        this.decorGraphics.lineBetween(20, y, this.snapshot.arena.width - 20, y);
+      for (let y = 24; y < this.arena.height - 20; y += tileSize) {
+        this.decorGraphics.lineBetween(20, y, this.arena.width - 20, y);
       }
     }
 
     if (drawFullDecor) {
       this.decorGraphics.lineStyle(2, 0x0ea5e9, 0.35);
-      this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 120);
+      this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 120);
       this.decorGraphics.lineStyle(1, 0x38bdf8, 0.25);
-      this.decorGraphics.strokeCircle(this.snapshot.arena.width / 2, this.snapshot.arena.height / 2, 190);
+      this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 190);
     }
 
     this.arenaGraphics.lineStyle(3, 0x22d3ee, 0.6);
-    this.arenaGraphics.strokeRect(0, 0, this.snapshot.arena.width, this.snapshot.arena.height);
+    this.arenaGraphics.strokeRect(0, 0, this.arena.width, this.arena.height);
 
-    for (const hazard of this.snapshot.arena.hazards) {
+    for (const hazard of this.arena.hazards) {
       this.createHazardLabel(hazard);
     }
   }
@@ -647,13 +650,13 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawHazards(): void {
-    if (!this.snapshot) {
+    if (!this.arena) {
       return;
     }
 
     // Nur auf Snapshot-Updates zeichnen reduziert Zeichenaufwand deutlich.
     this.hazardGraphics.clear();
-    for (const hazard of this.snapshot.arena.hazards) {
+    for (const hazard of this.arena.hazards) {
       this.drawHazard(hazard);
     }
   }
