@@ -8,6 +8,7 @@ import type {
   ForceOrb,
   GameSnapshot,
   LeaderboardEntry,
+  PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
@@ -22,10 +23,11 @@ const STREAM_PLAYER_RADIUS = 980;
 const STREAM_PICKUP_RADIUS = 1120;
 const STREAM_FULL_RESYNC_MS = 8000;
 
-const PLAYER_START_MASS = 20;
+const PLAYER_START_MASS = 10;
 const PLAYER_ACCELERATION_BASE = 1850;
 const PLAYER_MAX_SPEED_BASE = 420;
 const PLAYER_DRAG = 0.92;
+const SPEED_BOOST_MULTIPLIER = 1.5;
 const RESPAWN_TIME_MS = 1800;
 const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
@@ -38,6 +40,11 @@ const ORB_MAX_COUNT = 140;
 const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 8;
 const ORB_VALUE_MAX = 14;
+const SPECIAL_PICKUP_CHANCE = 0.12;
+const SPECIAL_PICKUP_RADIUS = 9;
+const SPECIAL_SPEED_DURATION_MS = 7000;
+const SPECIAL_SHIELD_DURATION_MS = 5500;
+const SPECIAL_STEALTH_DURATION_MS = 6500;
 const KILL_MASS_BONUS = 20;
 const CONSUME_MIN_RATIO = 1.22;
 const CONSUME_MASS_GAIN = 0.42;
@@ -98,6 +105,9 @@ interface ServerPlayer {
   connectedAt: number;
   spawnedAt: number;
   spawnProtectedUntil: number;
+  speedBoostUntil: number;
+  invulnerableUntil: number;
+  stealthUntil: number;
   lastInput: PlayerInputPayload;
   lastThreatBy?: string;
   aiTargetId?: string;
@@ -184,8 +194,8 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 
 const arena: ArenaState = {
-  width: 3000,
-  height: 1800,
+  width: 4200,
+  height: 2600,
   hazards: [],
 };
 
@@ -332,6 +342,22 @@ function refreshPlayerCosmetics(now: number): void {
   }
 }
 
+function hasSpeedBoost(player: ServerPlayer, now: number): boolean {
+  return player.speedBoostUntil > now;
+}
+
+function hasInvulnerability(player: ServerPlayer, now: number): boolean {
+  return player.invulnerableUntil > now;
+}
+
+function hasStealth(player: ServerPlayer, now: number): boolean {
+  return player.stealthUntil > now;
+}
+
+function isProtectedFromKnockOut(player: ServerPlayer, now: number): boolean {
+  return player.spawnProtectedUntil > now || hasInvulnerability(player, now);
+}
+
 function createStreamState(): StreamState {
   return {
     initialized: false,
@@ -353,6 +379,9 @@ function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
     color: player.color,
     skinId: player.skinId,
     spawnProtectionMsLeft: Math.max(0, player.spawnProtectedUntil - now),
+    speedBoostMsLeft: Math.max(0, player.speedBoostUntil - now),
+    invulnerableMsLeft: Math.max(0, player.invulnerableUntil - now),
+    stealthMsLeft: Math.max(0, player.stealthUntil - now),
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -374,6 +403,9 @@ function buildLeaderboardEntries(): LeaderboardEntry[] {
 
 function playerSignature(player: PlayerSnapshot): string {
   const protectionBucket = Math.ceil(player.spawnProtectionMsLeft / 120);
+  const speedBucket = Math.ceil(player.speedBoostMsLeft / 180);
+  const invulnerabilityBucket = Math.ceil(player.invulnerableMsLeft / 180);
+  const stealthBucket = Math.ceil(player.stealthMsLeft / 180);
   return [
     Math.round(player.x),
     Math.round(player.y),
@@ -384,11 +416,14 @@ function playerSignature(player: PlayerSnapshot): string {
     player.alive ? 1 : 0,
     player.skinId,
     protectionBucket,
+    speedBucket,
+    invulnerabilityBucket,
+    stealthBucket,
   ].join("|");
 }
 
 function pickupSignature(pickup: ForceOrb): string {
-  return [pickup.id, Math.round(pickup.x), Math.round(pickup.y), pickup.value, pickup.radius].join("|");
+  return [pickup.id, pickup.kind, Math.round(pickup.x), Math.round(pickup.y), pickup.value, pickup.radius].join("|");
 }
 
 function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): PlayerSnapshot[] {
@@ -397,6 +432,10 @@ function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): Player
 
   for (const candidate of players.values()) {
     if (!candidate.alive && candidate.id !== localPlayer.id) {
+      continue;
+    }
+
+    if (candidate.id !== localPlayer.id && hasStealth(candidate, now)) {
       continue;
     }
 
@@ -412,6 +451,23 @@ function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): Player
   }
 
   return result;
+}
+
+function filterLeaderboardForClient(
+  localPlayer: ServerPlayer,
+  leaderboard: LeaderboardEntry[],
+  now: number,
+): LeaderboardEntry[] {
+  return leaderboard.filter((entry) => {
+    if (entry.id === localPlayer.id) {
+      return true;
+    }
+    const candidate = players.get(entry.id);
+    if (!candidate) {
+      return false;
+    }
+    return !hasStealth(candidate, now);
+  });
 }
 
 function visiblePickupsForClient(localPlayer: ServerPlayer): ForceOrb[] {
@@ -525,7 +581,8 @@ function emitSnapshots(now: number): void {
       streamStates.set(socketId, streamState);
     }
 
-    const snapshot = buildClientSnapshot(localPlayer, now, leaderboard, streamState);
+    const filteredLeaderboard = filterLeaderboardForClient(localPlayer, leaderboard, now);
+    const snapshot = buildClientSnapshot(localPlayer, now, filteredLeaderboard, streamState);
     if (snapshot) {
       socket.emit("snapshot", snapshot);
     }
@@ -566,6 +623,9 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     connectedAt: now,
     spawnedAt: now,
     spawnProtectedUntil: now + SPAWN_PROTECTION_MS,
+    speedBoostUntil: 0,
+    invulnerableUntil: 0,
+    stealthUntil: 0,
     lastInput: {
       seq: 0,
       up: false,
@@ -591,6 +651,9 @@ function buildSnapshot(): GameSnapshot {
     color: player.color,
     skinId: player.skinId,
     spawnProtectionMsLeft: Math.max(0, player.spawnProtectedUntil - now),
+    speedBoostMsLeft: Math.max(0, player.speedBoostUntil - now),
+    invulnerableMsLeft: Math.max(0, player.invulnerableUntil - now),
+    stealthMsLeft: Math.max(0, player.stealthUntil - now),
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -717,6 +780,9 @@ function canConsumeTarget(source: ServerPlayer, target: ServerPlayer, now: numbe
   if (source.spawnProtectedUntil > now || target.spawnProtectedUntil > now) {
     return false;
   }
+  if (hasInvulnerability(target, now) || hasStealth(target, now)) {
+    return false;
+  }
   return source.mass >= target.mass * CONSUME_MIN_RATIO;
 }
 
@@ -731,6 +797,9 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   victim.alive = false;
   victim.vx = 0;
   victim.vy = 0;
+  victim.speedBoostUntil = 0;
+  victim.invulnerableUntil = 0;
+  victim.stealthUntil = 0;
   victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
 
   applyMass(victim, -Math.max(0.6, victim.mass * 0.05));
@@ -801,9 +870,15 @@ function handleRespawns(now: number): void {
     player.y = spawn.y;
     player.vx = 0;
     player.vy = 0;
+    player.mass = PLAYER_START_MASS;
+    player.radius = massToRadius(PLAYER_START_MASS);
+    player.score = 0;
     player.alive = true;
     player.spawnedAt = now;
     player.spawnProtectedUntil = now + SPAWN_PROTECTION_MS;
+    player.speedBoostUntil = 0;
+    player.invulnerableUntil = 0;
+    player.stealthUntil = 0;
     player.lastThreatBy = undefined;
   }
 }
@@ -821,26 +896,36 @@ function spawnOrb(now: number): void {
   }
 
   const id = `orb-${orbCounter++}`;
+  const specialRoll = Math.random();
+  let kind: PickupKind = "mass";
+  if (specialRoll < SPECIAL_PICKUP_CHANCE) {
+    const specials: PickupKind[] = ["speed", "shield", "stealth"];
+    kind = specials[Math.floor(Math.random() * specials.length)] ?? "speed";
+  }
+
+  const value = kind === "mass"
+    ? ORB_VALUE_MIN + Math.floor(Math.random() * (ORB_VALUE_MAX - ORB_VALUE_MIN + 1))
+    : 0;
+
   const orb: ForceOrb = {
     id,
+    kind,
     x: spawn.x,
     y: spawn.y,
-    radius: ORB_RADIUS,
-    value: ORB_VALUE_MIN + Math.floor(Math.random() * (ORB_VALUE_MAX - ORB_VALUE_MIN + 1)),
+    radius: kind === "mass" ? ORB_RADIUS : SPECIAL_PICKUP_RADIUS,
+    value,
   };
   pickups.set(id, orb);
   orbGridInsert(orb);
   lastOrbSpawnAt = now;
 }
 
-function collectOrbs(playersList: ServerPlayer[]): void {
+function collectOrbs(playersList: ServerPlayer[], now: number): void {
   for (const player of playersList) {
-    const pickupDist = player.radius + ORB_RADIUS;
-    const pickupDistSq = pickupDist * pickupDist;
+    const maxPickupDist = player.radius + Math.max(ORB_RADIUS, SPECIAL_PICKUP_RADIUS);
     const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(player.x / GRID_CELL)));
     const row = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(player.y / GRID_CELL)));
-    const range = Math.ceil(pickupDist / GRID_CELL) + 1;
-
+    const range = Math.ceil(maxPickupDist / GRID_CELL) + 1;
     for (let dr = -range; dr <= range; dr++) {
       const r = row + dr;
       if (r < 0 || r >= GRID_ROWS) continue;
@@ -853,11 +938,27 @@ function collectOrbs(playersList: ServerPlayer[]): void {
           if (!orb) { cell.delete(orbId); continue; }
           const dx = player.x - orb.x;
           const dy = player.y - orb.y;
-          if (dx * dx + dy * dy > pickupDistSq) continue;
+          const pickupDist = player.radius + orb.radius;
+          if (dx * dx + dy * dy > pickupDist * pickupDist) continue;
 
-          const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
-          applyMass(player, orb.value * catchUpBonus);
-          player.score += Math.max(1, Math.round(orb.value * 1.4));
+          if (orb.kind === "mass") {
+            const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
+            applyMass(player, orb.value * catchUpBonus);
+            player.score += Math.max(1, Math.round(orb.value * 1.4));
+          } else if (orb.kind === "speed") {
+            player.speedBoostUntil = Math.max(player.speedBoostUntil, now + SPECIAL_SPEED_DURATION_MS);
+            player.score += 3;
+          } else if (orb.kind === "shield") {
+            player.invulnerableUntil = Math.max(
+              player.invulnerableUntil,
+              now + SPECIAL_SHIELD_DURATION_MS,
+            );
+            player.score += 3;
+          } else if (orb.kind === "stealth") {
+            player.stealthUntil = Math.max(player.stealthUntil, now + SPECIAL_STEALTH_DURATION_MS);
+            player.score += 3;
+          }
+
           cell.delete(orbId);
           pickups.delete(orbId);
         }
@@ -924,7 +1025,7 @@ function runAi(now: number): void {
         }
       }
 
-      const shouldFarm = bot.mass < 25 || (!targetPlayer && Boolean(targetOrb));
+      const shouldFarm = !targetPlayer && Boolean(targetOrb);
 
       if (shouldFarm && targetOrb) {
         bot.aiTargetKind = "orb";
@@ -1048,8 +1149,9 @@ function tickSimulation(): void {
     if (input.down) inputY += 1;
 
     const direction = normalize(inputX, inputY);
-    const acceleration = accelerationForMass(player.mass);
-    const maxSpeed = maxSpeedForMass(player.mass);
+    const speedBoostActive = hasSpeedBoost(player, now);
+    const acceleration = accelerationForMass(player.mass) * (speedBoostActive ? SPEED_BOOST_MULTIPLIER : 1);
+    const maxSpeed = maxSpeedForMass(player.mass) * (speedBoostActive ? 1.22 : 1);
 
     player.vx += direction.x * acceleration * dt;
     player.vy += direction.y * acceleration * dt;
@@ -1069,7 +1171,7 @@ function tickSimulation(): void {
     applyMass(player, PASSIVE_MASS_GAIN_PER_SEC * dt);
   }
 
-  collectOrbs(activePlayers);
+  collectOrbs(activePlayers, now);
 
   for (const player of activePlayers) {
     player.x += player.vx * dt;
@@ -1078,7 +1180,7 @@ function tickSimulation(): void {
     const outsideArena =
       player.x < -60 || player.x > arena.width + 60 || player.y < -60 || player.y > arena.height + 60;
     if (outsideArena) {
-      if (player.spawnProtectedUntil <= now) {
+      if (!isProtectedFromKnockOut(player, now)) {
         knockOut(player);
         continue;
       }
@@ -1098,7 +1200,7 @@ function tickSimulation(): void {
     if (!player.alive) {
       continue;
     }
-    if (player.spawnProtectedUntil > now) {
+    if (isProtectedFromKnockOut(player, now)) {
       continue;
     }
     if (isInHazard(player)) {

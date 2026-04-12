@@ -20,8 +20,11 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
+export type PickupKind = "mass" | "speed" | "shield" | "stealth";
+
 export interface ForceOrb {
   id: string;
+  kind: PickupKind;
   x: number;
   y: number;
   value: number;
@@ -48,6 +51,9 @@ export interface PlayerSnapshot {
   color: number;
   skinId: SkinId;
   spawnProtectionMsLeft: number;
+  speedBoostMsLeft: number;
+  invulnerableMsLeft: number;
+  stealthMsLeft: number;
   mass: number;
   score: number;
   isBot: boolean;

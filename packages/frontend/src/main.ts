@@ -6,6 +6,7 @@ import type {
   ForceOrb,
   GameSnapshot,
   HazardZone,
+  PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
@@ -565,12 +566,26 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawOrb(orb: ForceOrb): void {
-    this.pickupGraphics.fillStyle(0xffffff, 0.58);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4);
-    this.pickupGraphics.fillStyle(0xfde047, 0.94);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 1.2);
-    this.pickupGraphics.lineStyle(1, 0x84cc16, 0.56);
-    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 4.8);
+    const styleByKind: Record<PickupKind, { core: number; glow: number; ring: number; alpha: number }> = {
+      mass: { core: 0xfde047, glow: 0xfffbeb, ring: 0x84cc16, alpha: 0.94 },
+      speed: { core: 0x22d3ee, glow: 0xe0f2fe, ring: 0x0284c7, alpha: 0.92 },
+      shield: { core: 0x60a5fa, glow: 0xdbeafe, ring: 0x1d4ed8, alpha: 0.92 },
+      stealth: { core: 0xc4b5fd, glow: 0xf3e8ff, ring: 0x7c3aed, alpha: 0.9 },
+    };
+
+    const style = styleByKind[orb.kind] ?? styleByKind.mass;
+    const pulse = 0.88 + 0.12 * (0.5 + 0.5 * Math.sin(this.time.now / 150 + orb.x * 0.01));
+    this.pickupGraphics.fillStyle(style.glow, 0.42 * pulse);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 5.2);
+    this.pickupGraphics.fillStyle(style.core, style.alpha);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + (orb.kind === "mass" ? 1.2 : 0.6));
+    this.pickupGraphics.lineStyle(1.5, style.ring, 0.72 * pulse);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 5.9);
+
+    if (orb.kind !== "mass") {
+      this.pickupGraphics.lineStyle(1, 0xffffff, 0.52 * pulse);
+      this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 2.6);
+    }
   }
 
   private drawHazards(): void {
@@ -732,7 +747,9 @@ class GameScene extends Phaser.Scene {
       label.setPosition(px, py - 42);
       label.setVisible(showNameLabels || player.id === this.localPlayerId);
       const shieldMarker = hasSpawnProtection ? " 🛡" : "";
-      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}${shieldMarker}`;
+      const invulnMarker = player.invulnerableMsLeft > 0 ? " ⛨" : "";
+      const stealthMarker = player.stealthMsLeft > 0 ? " 👁" : "";
+      const labelText = `${player.name}${player.isBot ? " 🤖" : ""}${shieldMarker}${invulnMarker}${stealthMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -761,6 +778,13 @@ class GameScene extends Phaser.Scene {
     return this.snapshot?.players.find((player) => player.id === this.localPlayerId);
   }
 
+  private formatEffectLabel(prefix: string, msLeft: number): string | null {
+    if (msLeft <= 0) {
+      return null;
+    }
+    return `${prefix} ${(msLeft / 1000).toFixed(1)}s`;
+  }
+
   private updateHud(): void {
     const local = this.getLocalPlayer();
     if (local) {
@@ -769,7 +793,13 @@ class GameScene extends Phaser.Scene {
         local.spawnProtectionMsLeft > 0
           ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
           : "";
-      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score} | ${skinText}${protectionText}`;
+      const effects = [
+        this.formatEffectLabel("Speed", local.speedBoostMsLeft),
+        this.formatEffectLabel("Unverwundbar", local.invulnerableMsLeft),
+        this.formatEffectLabel("Unsichtbar", local.stealthMsLeft),
+      ].filter((entry): entry is string => Boolean(entry));
+      const effectText = effects.length > 0 ? ` | Effekte: ${effects.join(" • ")}` : "";
+      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score} | ${skinText}${protectionText}${effectText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
