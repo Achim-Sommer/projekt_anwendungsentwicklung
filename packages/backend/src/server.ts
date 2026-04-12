@@ -7,6 +7,7 @@ import type {
   ClientToServerEvents,
   ForceOrb,
   GameSnapshot,
+  LeaderboardEntry,
   PlayerInputPayload,
   PlayerSnapshot,
   ServerToClientEvents,
@@ -17,6 +18,9 @@ const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 60;
 const SNAPSHOT_RATE = 40;
 const DT = 1 / TICK_RATE;
+const STREAM_PLAYER_RADIUS = 980;
+const STREAM_PICKUP_RADIUS = 1120;
+const STREAM_FULL_RESYNC_MS = 8000;
 
 const PLAYER_START_MASS = 20;
 const PLAYER_ACCELERATION_BASE = 1850;
@@ -32,11 +36,12 @@ const TARGET_TOTAL_PLAYERS = 4;
 const ORB_SPAWN_INTERVAL_MS = 420;
 const ORB_MAX_COUNT = 140;
 const ORB_RADIUS = 6;
-const ORB_VALUE_MIN = 4;
-const ORB_VALUE_MAX = 8;
-const KILL_MASS_BONUS = 12;
+const ORB_VALUE_MIN = 8;
+const ORB_VALUE_MAX = 14;
+const KILL_MASS_BONUS = 20;
 const CONSUME_MIN_RATIO = 1.22;
-const CONSUME_MASS_GAIN = 0.22;
+const CONSUME_MASS_GAIN = 0.42;
+const PASSIVE_MASS_GAIN_PER_SEC = 0.9;
 const HAZARD_DEATH_OVERLAP_RATIO = 0.55;
 const HAZARD_DEATH_OVERLAP_MIN = 10;
 const HAZARD_DEATH_OVERLAP_MAX = 24;
@@ -99,6 +104,13 @@ interface ServerPlayer {
   aiTargetKind?: "player" | "orb";
   aiDecisionAt: number;
   aiTickPhase: number;
+}
+
+interface StreamState {
+  initialized: boolean;
+  lastFullAt: number;
+  playerSignatures: Map<string, string>;
+  pickupSignatures: Map<string, string>;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -174,22 +186,7 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 const arena: ArenaState = {
   width: 3000,
   height: 1800,
-  hazards: [
-    { id: "pit-mid", type: "pit", x: 1435, y: 830, width: 170, height: 170 },
-    { id: "pit-north", type: "pit", x: 1400, y: 210, width: 220, height: 120 },
-    { id: "pit-south", type: "pit", x: 1380, y: 1450, width: 250, height: 120 },
-    { id: "pit-west", type: "pit", x: 360, y: 760, width: 150, height: 210 },
-    { id: "pit-east", type: "pit", x: 2480, y: 730, width: 150, height: 210 },
-    { id: "lava-left", type: "lava", x: 420, y: 1260, width: 300, height: 140 },
-    {
-      id: "electric-right",
-      type: "electric",
-      x: 2160,
-      y: 350,
-      width: 340,
-      height: 170,
-    },
-  ],
+  hazards: [],
 };
 
 // --- Spatial grid for orb lookups ---
@@ -215,6 +212,7 @@ function orbGridRemove(orb: ForceOrb): void {
 
 const players = new Map<string, ServerPlayer>();
 const pickups = new Map<string, ForceOrb>();
+const streamStates = new Map<string, StreamState>();
 
 let tick = 0;
 let lastSnapshotAt = 0;
@@ -236,7 +234,7 @@ function normalize(x: number, y: number): { x: number; y: number; length: number
 }
 
 function massToRadius(mass: number): number {
-  return 10 + 1.9 * Math.sqrt(Math.max(1, mass));
+  return 10 + 2.35 * Math.sqrt(Math.max(1, mass));
 }
 
 function maxSpeedForMass(mass: number): number {
@@ -331,6 +329,206 @@ function refreshPlayerCosmetics(now: number): void {
     const tier = resolveSkinTierForPlayer(player, now);
     player.skinId = tier.id;
     player.color = tier.color;
+  }
+}
+
+function createStreamState(): StreamState {
+  return {
+    initialized: false,
+    lastFullAt: 0,
+    playerSignatures: new Map<string, string>(),
+    pickupSignatures: new Map<string, string>(),
+  };
+}
+
+function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
+  return {
+    id: player.id,
+    name: player.name,
+    x: player.x,
+    y: player.y,
+    vx: player.vx,
+    vy: player.vy,
+    radius: player.radius,
+    color: player.color,
+    skinId: player.skinId,
+    spawnProtectionMsLeft: Math.max(0, player.spawnProtectedUntil - now),
+    mass: player.mass,
+    score: player.score,
+    isBot: player.isBot,
+    alive: player.alive,
+  };
+}
+
+function buildLeaderboardEntries(): LeaderboardEntry[] {
+  return Array.from(players.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map((player) => ({
+      id: player.id,
+      name: player.name,
+      score: player.score,
+      isBot: player.isBot,
+    }));
+}
+
+function playerSignature(player: PlayerSnapshot): string {
+  const protectionBucket = Math.ceil(player.spawnProtectionMsLeft / 120);
+  return [
+    Math.round(player.x),
+    Math.round(player.y),
+    Math.round(player.vx),
+    Math.round(player.vy),
+    Math.round(player.radius * 10),
+    player.score,
+    player.alive ? 1 : 0,
+    player.skinId,
+    protectionBucket,
+  ].join("|");
+}
+
+function pickupSignature(pickup: ForceOrb): string {
+  return [pickup.id, Math.round(pickup.x), Math.round(pickup.y), pickup.value, pickup.radius].join("|");
+}
+
+function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): PlayerSnapshot[] {
+  const radiusSq = STREAM_PLAYER_RADIUS * STREAM_PLAYER_RADIUS;
+  const result: PlayerSnapshot[] = [];
+
+  for (const candidate of players.values()) {
+    if (!candidate.alive && candidate.id !== localPlayer.id) {
+      continue;
+    }
+
+    if (candidate.id !== localPlayer.id) {
+      const dx = candidate.x - localPlayer.x;
+      const dy = candidate.y - localPlayer.y;
+      if (dx * dx + dy * dy > radiusSq) {
+        continue;
+      }
+    }
+
+    result.push(toPlayerSnapshot(candidate, now));
+  }
+
+  return result;
+}
+
+function visiblePickupsForClient(localPlayer: ServerPlayer): ForceOrb[] {
+  const radiusSq = STREAM_PICKUP_RADIUS * STREAM_PICKUP_RADIUS;
+  const result: ForceOrb[] = [];
+
+  for (const pickup of pickups.values()) {
+    const dx = pickup.x - localPlayer.x;
+    const dy = pickup.y - localPlayer.y;
+    if (dx * dx + dy * dy <= radiusSq) {
+      result.push(pickup);
+    }
+  }
+
+  return result;
+}
+
+function buildClientSnapshot(
+  localPlayer: ServerPlayer,
+  now: number,
+  leaderboard: LeaderboardEntry[],
+  streamState: StreamState,
+  forceFull = false,
+): GameSnapshot | null {
+  const visiblePlayers = visiblePlayersForClient(localPlayer, now);
+  const visiblePickups = visiblePickupsForClient(localPlayer);
+
+  const shouldFull =
+    forceFull ||
+    !streamState.initialized ||
+    now - streamState.lastFullAt >= STREAM_FULL_RESYNC_MS;
+
+  const nextPlayerSignatures = new Map<string, string>();
+  for (const player of visiblePlayers) {
+    nextPlayerSignatures.set(player.id, playerSignature(player));
+  }
+
+  const nextPickupSignatures = new Map<string, string>();
+  for (const pickup of visiblePickups) {
+    nextPickupSignatures.set(pickup.id, pickupSignature(pickup));
+  }
+
+  if (shouldFull) {
+    streamState.initialized = true;
+    streamState.lastFullAt = now;
+    streamState.playerSignatures = nextPlayerSignatures;
+    streamState.pickupSignatures = nextPickupSignatures;
+    return {
+      tick,
+      serverTime: now,
+      full: true,
+      players: visiblePlayers,
+      pickups: visiblePickups,
+      removedPlayerIds: [],
+      removedPickupIds: [],
+      leaderboard,
+    };
+  }
+
+  const changedPlayers = visiblePlayers.filter((player) => {
+    const signature = nextPlayerSignatures.get(player.id);
+    return signature !== streamState.playerSignatures.get(player.id);
+  });
+  const changedPickups = visiblePickups.filter((pickup) => {
+    const signature = nextPickupSignatures.get(pickup.id);
+    return signature !== streamState.pickupSignatures.get(pickup.id);
+  });
+  const removedPlayerIds = Array.from(streamState.playerSignatures.keys()).filter(
+    (id) => !nextPlayerSignatures.has(id),
+  );
+  const removedPickupIds = Array.from(streamState.pickupSignatures.keys()).filter(
+    (id) => !nextPickupSignatures.has(id),
+  );
+
+  streamState.playerSignatures = nextPlayerSignatures;
+  streamState.pickupSignatures = nextPickupSignatures;
+
+  if (
+    changedPlayers.length === 0 &&
+    changedPickups.length === 0 &&
+    removedPlayerIds.length === 0 &&
+    removedPickupIds.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    tick,
+    serverTime: now,
+    full: false,
+    players: changedPlayers,
+    pickups: changedPickups,
+    removedPlayerIds,
+    removedPickupIds,
+    leaderboard,
+  };
+}
+
+function emitSnapshots(now: number): void {
+  const leaderboard = buildLeaderboardEntries();
+
+  for (const [socketId, socket] of io.sockets.sockets) {
+    const localPlayer = players.get(socketId);
+    if (!localPlayer) {
+      continue;
+    }
+
+    let streamState = streamStates.get(socketId);
+    if (!streamState) {
+      streamState = createStreamState();
+      streamStates.set(socketId, streamState);
+    }
+
+    const snapshot = buildClientSnapshot(localPlayer, now, leaderboard, streamState);
+    if (snapshot) {
+      socket.emit("snapshot", snapshot);
+    }
   }
 }
 
@@ -451,6 +649,10 @@ function hazardCenter(hazard: ArenaState["hazards"][number]): { x: number; y: nu
 }
 
 function nearestHazardCenter(target: ServerPlayer): { x: number; y: number } {
+  if (arena.hazards.length === 0) {
+    return { x: target.x, y: target.y };
+  }
+
   let best = hazardCenter(arena.hazards[0]);
   let bestDistSq = Number.POSITIVE_INFINITY;
 
@@ -531,7 +733,7 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   victim.vy = 0;
   victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
 
-  applyMass(victim, -Math.max(2, victim.mass * 0.18));
+  applyMass(victim, -Math.max(0.6, victim.mass * 0.05));
 
   const scorerId = actorId ?? victim.lastThreatBy;
   if (scorerId && scorerId !== victim.id) {
@@ -862,6 +1064,9 @@ function tickSimulation(): void {
       player.vx *= scaled;
       player.vy *= scaled;
     }
+
+    // Permanenter, sanfter Growth-Loop: Spieler werden auch ohne Orbs langsam groesser.
+    applyMass(player, PASSIVE_MASS_GAIN_PER_SEC * dt);
   }
 
   collectOrbs(activePlayers);
@@ -902,7 +1107,7 @@ function tickSimulation(): void {
   }
 
   if (now - lastSnapshotAt >= 1000 / SNAPSHOT_RATE) {
-    io.emit("snapshot", buildSnapshot());
+    emitSnapshots(now);
     lastSnapshotAt = now;
   }
 }
@@ -919,12 +1124,21 @@ io.on("connection", (socket) => {
 
   const player = createPlayer(socket.id, requestedName, false);
   players.set(player.id, player);
+  streamStates.set(socket.id, createStreamState());
   maintainBots();
+
+  const initialSnapshot = buildClientSnapshot(
+    player,
+    Date.now(),
+    buildLeaderboardEntries(),
+    streamStates.get(socket.id) ?? createStreamState(),
+    true,
+  ) ?? buildSnapshot();
 
   socket.emit("welcome", {
     yourId: player.id,
     arena,
-    snapshot: buildSnapshot(),
+    snapshot: initialSnapshot,
   });
 
   socket.on("input", (payload) => {
@@ -938,6 +1152,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[Server] Player disconnected: id=${socket.id}`);
     players.delete(player.id);
+    streamStates.delete(socket.id);
     io.emit("playerLeft", { id: player.id });
     maintainBots();
   });

@@ -140,6 +140,8 @@ class GameScene extends Phaser.Scene {
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
   private lastLabelText = new Map<string, string>();
+  private snapshotPlayers = new Map<string, PlayerSnapshot>();
+  private snapshotPickups = new Map<string, ForceOrb>();
 
   private snapshot: GameSnapshot | null = null;
   private arena: ArenaState | null = null;
@@ -181,7 +183,7 @@ class GameScene extends Phaser.Scene {
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
       this.arena = payload.arena;
-      this.snapshot = payload.snapshot;
+      this.applyIncomingSnapshot(payload.snapshot);
       this.syncRenderPlayersFromSnapshot(true);
       this.resizeToArena();
       this.updateStatus();
@@ -192,7 +194,7 @@ class GameScene extends Phaser.Scene {
       this.updateHud();
     };
     this.onSnapshot = (payload) => {
-      this.snapshot = payload;
+      this.applyIncomingSnapshot(payload);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
       this.drawPickups();
@@ -205,7 +207,7 @@ class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.cameras.main.setBackgroundColor(0xbfe7ff);
+    this.cameras.main.setBackgroundColor(0x1e293b);
     this.cameras.main.roundPixels = true;
 
     this.arenaGraphics = this.add.graphics();
@@ -368,6 +370,40 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  private applyIncomingSnapshot(payload: GameSnapshot): void {
+    if (payload.full || !this.snapshot) {
+      this.snapshotPlayers.clear();
+      this.snapshotPickups.clear();
+      for (const player of payload.players) {
+        this.snapshotPlayers.set(player.id, player);
+      }
+      for (const pickup of payload.pickups) {
+        this.snapshotPickups.set(pickup.id, pickup);
+      }
+    } else {
+      for (const removedPlayerId of payload.removedPlayerIds ?? []) {
+        this.snapshotPlayers.delete(removedPlayerId);
+      }
+      for (const removedPickupId of payload.removedPickupIds ?? []) {
+        this.snapshotPickups.delete(removedPickupId);
+      }
+      for (const player of payload.players) {
+        this.snapshotPlayers.set(player.id, player);
+      }
+      for (const pickup of payload.pickups) {
+        this.snapshotPickups.set(pickup.id, pickup);
+      }
+    }
+
+    this.snapshot = {
+      tick: payload.tick,
+      serverTime: payload.serverTime,
+      players: Array.from(this.snapshotPlayers.values()),
+      pickups: Array.from(this.snapshotPickups.values()),
+      leaderboard: payload.leaderboard ?? this.snapshot?.leaderboard,
+    };
+  }
+
   private updateRenderPlayers(): void {
     if (!this.snapshot) {
       return;
@@ -466,9 +502,9 @@ class GameScene extends Phaser.Scene {
     this.arenaGraphics.clear();
     this.hazardGraphics.clear();
     this.pickupGraphics.clear();
-    this.arenaGraphics.fillStyle(0xbfe7ff, 1);
+    this.arenaGraphics.fillStyle(0x172236, 1);
     this.arenaGraphics.fillRect(0, 0, this.arena.width, this.arena.height);
-    this.arenaGraphics.fillStyle(0xe8f9ff, 0.95);
+    this.arenaGraphics.fillStyle(0x22344d, 0.96);
     this.arenaGraphics.fillRoundedRect(10, 10, this.arena.width - 20, this.arena.height - 20, 24);
 
     // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
@@ -477,13 +513,13 @@ class GameScene extends Phaser.Scene {
     for (let y = 24; y < this.arena.height - 24; y += tileSize) {
       for (let x = 24; x < this.arena.width - 24; x += tileSize) {
         const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
-        this.decorGraphics.fillStyle(isAlt ? 0xd7f5e5 : 0xd8e9ff, drawFullDecor ? 0.5 : 0.34);
+        this.decorGraphics.fillStyle(isAlt ? 0x2a4362 : 0x314d70, drawFullDecor ? 0.48 : 0.32);
         this.decorGraphics.fillRoundedRect(x, y, tileSize - 10, tileSize - 10, 8);
       }
     }
 
     if (drawFullDecor) {
-      this.decorGraphics.lineStyle(1, 0x7da4b2, 0.32);
+      this.decorGraphics.lineStyle(1, 0x6f8aa8, 0.3);
       for (let x = 24; x < this.arena.width - 20; x += tileSize) {
         this.decorGraphics.lineBetween(x, 20, x, this.arena.height - 20);
       }
@@ -493,13 +529,13 @@ class GameScene extends Phaser.Scene {
     }
 
     if (drawFullDecor) {
-      this.decorGraphics.lineStyle(2, 0x6ee7b7, 0.4);
+      this.decorGraphics.lineStyle(2, 0x22d3ee, 0.32);
       this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 120);
-      this.decorGraphics.lineStyle(1, 0x60a5fa, 0.34);
+      this.decorGraphics.lineStyle(1, 0x38bdf8, 0.26);
       this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 190);
     }
 
-    this.arenaGraphics.lineStyle(3, 0x2aa5d8, 0.58);
+    this.arenaGraphics.lineStyle(3, 0x5aa8d8, 0.52);
     this.arenaGraphics.strokeRect(0, 0, this.arena.width, this.arena.height);
 
     for (const hazard of this.arena.hazards) {
@@ -738,8 +774,12 @@ class GameScene extends Phaser.Scene {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
 
-    const ranking = [...(this.snapshot?.players ?? [])]
-      .sort((a, b) => b.score - a.score)
+    const rankingSource =
+      this.snapshot?.leaderboard && this.snapshot.leaderboard.length > 0
+        ? this.snapshot.leaderboard
+        : [...(this.snapshot?.players ?? [])].sort((a, b) => b.score - a.score);
+
+    const ranking = rankingSource
       .slice(0, this.leaderboardLines)
       .map((player, index) => {
         const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
@@ -787,7 +827,7 @@ const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   width: 1280,
   height: 720,
-  backgroundColor: "#bfe7ff",
+  backgroundColor: "#1e293b",
   antialias: false,
   powerPreference: "high-performance",
   fps: {

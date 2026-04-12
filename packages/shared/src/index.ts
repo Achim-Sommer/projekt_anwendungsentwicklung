@@ -30,6 +30,13 @@ export interface ForceOrb {
 
 export type SkinId = "starter" | "mint" | "sunset" | "rose" | "gold";
 
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  score: number;
+  isBot: boolean;
+}
+
 export interface PlayerSnapshot {
   id: string;
   name: string;
@@ -52,6 +59,10 @@ export interface GameSnapshot {
   serverTime: number;
   players: PlayerSnapshot[];
   pickups: ForceOrb[];
+  full?: boolean;
+  removedPlayerIds?: string[];
+  removedPickupIds?: string[];
+  leaderboard?: LeaderboardEntry[];
 }
 
 export interface WelcomePayload {
