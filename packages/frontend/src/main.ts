@@ -98,29 +98,29 @@ interface QualityProfile {
 
 const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
   low: {
-    inputIntervalMs: 34,
+    inputIntervalMs: 20,
     hudIntervalMs: 120,
-    pickupRedrawIntervalMs: 100,
-    pickupMargin: 28,
+    pickupRedrawIntervalMs: 120,
+    pickupMargin: 18,
     pickupDetail: "low",
-    maxNameLabels: 8,
-    nameLabelDistance: 380,
+    maxNameLabels: 3,
+    nameLabelDistance: 260,
     debugIntervalMs: 250,
   },
   normal: {
-    inputIntervalMs: 33,
-    hudIntervalMs: 100,
-    pickupRedrawIntervalMs: 66,
-    pickupMargin: 42,
+    inputIntervalMs: 20,
+    hudIntervalMs: 95,
+    pickupRedrawIntervalMs: 80,
+    pickupMargin: 28,
     pickupDetail: "normal",
-    maxNameLabels: 14,
-    nameLabelDistance: 520,
+    maxNameLabels: 8,
+    nameLabelDistance: 420,
     debugIntervalMs: 220,
   },
   high: {
-    inputIntervalMs: 33,
+    inputIntervalMs: 20,
     hudIntervalMs: 95,
-    pickupRedrawIntervalMs: 40,
+    pickupRedrawIntervalMs: 50,
     pickupMargin: 56,
     pickupDetail: "high",
     maxNameLabels: 22,
@@ -133,13 +133,13 @@ const QUALITY_STORAGE_KEY = "arena-quality-mode";
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
-  if (stored === "high" || stored === "normal") {
-    return stored;
-  }
   if (stored === "low") {
+    return "low";
+  }
+  if (stored === "high") {
     return "normal";
   }
-  return "high";
+  return "normal";
 }
 
 let playerName = "";
@@ -296,12 +296,18 @@ class GameScene extends Phaser.Scene {
     this.onSnapshot = (payload) => {
       this.latestServerDebug = payload.debug ?? this.latestServerDebug;
       if (this.debugEnabled) {
-        this.latestSnapshotBytes = JSON.stringify(payload).length;
+        this.latestSnapshotBytes = this.estimateSnapshotBytes(payload);
       }
       this.applyIncomingSnapshot(payload);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
-      this.pickupsDirty = true;
+      const pickupChanged =
+        payload.full === true ||
+        (payload.pickups?.length ?? 0) > 0 ||
+        (payload.removedPickupIds?.length ?? 0) > 0;
+      if (pickupChanged) {
+        this.pickupsDirty = true;
+      }
       this.hudDirty = true;
     };
     this.onPlayerLeft = () => {
@@ -358,8 +364,8 @@ class GameScene extends Phaser.Scene {
     this.maybeUpdateHud(true);
 
     const camera = this.cameras.main;
-    camera.startFollow(this.cameraTarget, true, 0.12, 0.12);
-    camera.setDeadzone(130, 90);
+    camera.startFollow(this.cameraTarget, true, 0.045, 0.045);
+    camera.setDeadzone(360, 220);
 
     keyboard.on("keydown-F8", (event: KeyboardEvent) => {
       event.preventDefault();
@@ -427,7 +433,7 @@ class GameScene extends Phaser.Scene {
     const dx = this.pointerWorld.x - px;
     const dy = this.pointerWorld.y - py;
     const distance = Math.hypot(dx, dy);
-    const deadzone = Math.max(16, player.radius * 1.15);
+    const deadzone = Math.max(8, player.radius * 0.45);
 
     const keyboardActive =
       this.keys.up.isDown || this.keys.down.isDown || this.keys.left.isDown || this.keys.right.isDown;
@@ -448,11 +454,21 @@ class GameScene extends Phaser.Scene {
     const nx = dx / Math.max(distance, 0.0001);
     const ny = dy / Math.max(distance, 0.0001);
     return {
-      up: ny < -0.28,
-      down: ny > 0.28,
-      left: nx < -0.28,
-      right: nx > 0.28,
+      up: ny < -0.16,
+      down: ny > 0.16,
+      left: nx < -0.16,
+      right: nx > 0.16,
     };
+  }
+
+  private estimateSnapshotBytes(payload: GameSnapshot): number {
+    const playersBytes = payload.players.length * 68;
+    const pickupsBytes = payload.pickups.length * 32;
+    const removedBytes =
+      (payload.removedPlayerIds?.length ?? 0) * 12 +
+      (payload.removedPickupIds?.length ?? 0) * 12;
+    const leaderboardBytes = (payload.leaderboard?.length ?? 0) * 24;
+    return 96 + playersBytes + pickupsBytes + removedBytes + leaderboardBytes;
   }
 
   private inputStatesEqual(
@@ -586,10 +602,10 @@ class GameScene extends Phaser.Scene {
     const py = render?.y ?? localPlayer.y;
     this.cameraTarget.setPosition(px, py);
 
-    const massZoom = clamp(1.08 * Math.pow(24 / Math.max(12, localPlayer.mass), 0.2), 0.58, 1.24);
-    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 920, 0.8, 1.32);
-    const desiredZoom = clamp(massZoom * viewportFactor, 0.6, 1.28);
-    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.075));
+    const massZoom = clamp(0.92 * Math.pow(20 / Math.max(14, localPlayer.mass), 0.14), 0.72, 1.04);
+    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 980, 0.88, 1.2);
+    const desiredZoom = clamp(massZoom * viewportFactor, 0.76, 1.08);
+    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.04));
   }
 
   private syncRenderPlayersFromSnapshot(force: boolean): void {
