@@ -730,6 +730,12 @@ class GameScene extends Phaser.Scene {
       players: Array.from(this.snapshotPlayers.values()),
       pickups: Array.from(this.snapshotPickups.values()),
       leaderboard: payload.leaderboard ?? this.snapshot?.leaderboard,
+      bountyTargetId:
+        payload.bountyTargetId !== undefined
+          ? payload.bountyTargetId
+          : this.snapshot?.bountyTargetId,
+      bountyBonus: payload.bountyBonus ?? this.snapshot?.bountyBonus,
+      activeEvent: payload.activeEvent ?? this.snapshot?.activeEvent,
       debug: payload.debug ?? this.snapshot?.debug,
     };
   }
@@ -1053,6 +1059,7 @@ class GameScene extends Phaser.Scene {
 
     for (const player of visiblePlayers) {
       const hasSpawnProtection = player.spawnProtectionMsLeft > 0;
+      const isBountyTarget = this.snapshot?.bountyTargetId === player.id;
       const protectionPulse = hasSpawnProtection
         ? 0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this.time.now / 130))
         : 1;
@@ -1063,6 +1070,11 @@ class GameScene extends Phaser.Scene {
 
       // Agar.io-aehnlicher Look: ein einzelner Kreis, der mit der Masse waechst.
       this.playerGraphics.fillCircle(px, py, player.radius);
+
+      if (isBountyTarget) {
+        this.playerGraphics.lineStyle(3, 0xf59e0b, 0.9);
+        this.playerGraphics.strokeCircle(px, py, player.radius + 5);
+      }
 
       let label = this.nameLabels.get(player.id);
       if (!label) {
@@ -1094,10 +1106,11 @@ class GameScene extends Phaser.Scene {
         shownLabels += 1;
       }
       const botMarker = player.isBot ? " [BOT]" : "";
+      const bountyMarker = isBountyTarget ? " [BOUNTY]" : "";
       const shieldMarker = hasSpawnProtection ? " [SAFE]" : "";
       const invulnMarker = player.invulnerableMsLeft > 0 ? " [INV]" : "";
       const stealthMarker = player.stealthMsLeft > 0 ? " [STL]" : "";
-      const labelText = `${player.name}${botMarker}${shieldMarker}${invulnMarker}${stealthMarker}`;
+      const labelText = `${player.name}${botMarker}${bountyMarker}${shieldMarker}${invulnMarker}${stealthMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -1137,6 +1150,11 @@ class GameScene extends Phaser.Scene {
   }
 
   private updateHud(): void {
+    this.updateStatus();
+
+    const bountyTargetId = this.snapshot?.bountyTargetId ?? null;
+    const bountyBonus = this.snapshot?.bountyBonus ?? 0;
+
     const local = this.getLocalPlayer();
     if (local) {
       const protectionText =
@@ -1149,7 +1167,10 @@ class GameScene extends Phaser.Scene {
         this.formatEffectLabel("Unsichtbar", local.stealthMsLeft),
       ].filter((entry): entry is string => Boolean(entry));
       const effectText = effects.length > 0 ? ` | Effekte: ${effects.join(" • ")}` : "";
-      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${effectText}`;
+      const localBountyText =
+        bountyTargetId === local.id ? ` | Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P` : "";
+      hudPlayerElement.textContent =
+        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${effectText}${localBountyText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
@@ -1165,7 +1186,8 @@ class GameScene extends Phaser.Scene {
         const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
         const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
         const role = player.isBot ? "BOT" : "PLY";
-        return `${rankBadge} ${shortName} ${role}  ${player.score} P`;
+        const bountyMarker = bountyTargetId && player.id === bountyTargetId ? " BNT" : "";
+        return `${rankBadge} ${shortName} ${role}${bountyMarker}  ${player.score} P`;
       })
       .join("\n");
 
@@ -1174,8 +1196,23 @@ class GameScene extends Phaser.Scene {
 
   private updateStatus(): void {
     const qualityText = `Qualitaet: ${this.qualityMode.toUpperCase()} (F8)`;
+    const activeEvent = this.snapshot?.activeEvent;
+    const eventText =
+      activeEvent && activeEvent.kind !== "none"
+        ? ` | Event: ${activeEvent.title} (${Math.max(0, Math.ceil(activeEvent.msLeft / 1000))}s)`
+        : "";
+    const bountyTargetId = this.snapshot?.bountyTargetId;
+    const bountyBonus = Math.max(0, Math.round(this.snapshot?.bountyBonus ?? 0));
+    const bountyTarget = bountyTargetId
+      ? this.snapshot?.players.find((player) => player.id === bountyTargetId)
+      : undefined;
+    const bountyText = bountyTarget
+      ? ` | Kopfgeld: ${bountyTarget.name.slice(0, 10)} (+${bountyBonus}P)`
+      : "";
+
     if (socket.connected) {
-      hudStatusElement.textContent = `Online als ${playerName || "Spieler"} | ${qualityText}`;
+      hudStatusElement.textContent =
+        `Online als ${playerName || "Spieler"} | ${qualityText}${eventText}${bountyText}`;
     } else {
       hudStatusElement.textContent = `Warte auf Lobby-Start… | ${qualityText}`;
     }

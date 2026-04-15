@@ -32,6 +32,7 @@ export interface ForceOrb {
 }
 
 export type SkinId = "starter" | "mint" | "sunset" | "rose" | "gold";
+export type MatchEventKind = "none" | "double_orbs" | "haste" | "bounty_rush";
 
 export interface LeaderboardEntry {
   id: string;
@@ -69,6 +70,13 @@ export interface SnapshotDebugInfo {
   orbCap: number;
 }
 
+export interface ActiveMatchEventSnapshot {
+  kind: MatchEventKind;
+  title: string;
+  description: string;
+  msLeft: number;
+}
+
 export interface GameSnapshot {
   tick: number;
   serverTime: number;
@@ -78,6 +86,9 @@ export interface GameSnapshot {
   removedPlayerIds?: string[];
   removedPickupIds?: string[];
   leaderboard?: LeaderboardEntry[];
+  bountyTargetId?: string | null;
+  bountyBonus?: number;
+  activeEvent?: ActiveMatchEventSnapshot;
   debug?: SnapshotDebugInfo;
 }
 

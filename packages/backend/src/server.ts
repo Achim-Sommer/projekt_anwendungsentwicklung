@@ -3,12 +3,14 @@ import { createReadStream, existsSync, statSync } from "fs";
 import path from "path";
 import { Server } from "socket.io";
 import type {
+  ActiveMatchEventSnapshot,
   ArenaState,
   ClientToServerEvents,
   DebugPongPayload,
   ForceOrb,
   GameSnapshot,
   LeaderboardEntry,
+  MatchEventKind,
   PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
@@ -64,6 +66,15 @@ const PASSIVE_MASS_GAIN_PER_SEC = 0.55;
 const HAZARD_DEATH_OVERLAP_RATIO = 0.55;
 const HAZARD_DEATH_OVERLAP_MIN = 10;
 const HAZARD_DEATH_OVERLAP_MAX = 24;
+const BOUNTY_ROTATE_INTERVAL_MS = 26_000;
+const BOUNTY_MIN_PLAYERS = 2;
+const BOUNTY_BONUS_POINTS = 38;
+const BOUNTY_BONUS_MASS = 14;
+const MATCH_EVENT_INTERVAL_MS = 62_000;
+const MATCH_EVENT_DURATION_MS = 20_000;
+const EVENT_HASTE_SPEED_MULTIPLIER = 1.16;
+const EVENT_DOUBLE_ORB_MULTIPLIER = 2;
+const EVENT_BOUNTY_RUSH_MULTIPLIER = 1.55;
 
 const AI_TARGET_RETHINK_BASE_MS = 320;
 const AI_TARGET_RETHINK_RANDOM_MS = 420;
@@ -122,6 +133,14 @@ interface StreamState {
   lastFullAt: number;
   playerSignatures: Map<string, string>;
   pickupSignatures: Map<string, string>;
+  lastMetaSignature: string;
+}
+
+interface ActiveMatchEventState {
+  kind: MatchEventKind;
+  title: string;
+  description: string;
+  endsAt: number;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -238,6 +257,16 @@ let currentLeaderboardRate = LEADERBOARD_RATE_IDLE;
 let combatBoostUntil = 0;
 let loopAccumulatorMs = 0;
 let lastLoopAt = Date.now();
+let bountyTargetId: string | null = null;
+let bountyBonusPoints = BOUNTY_BONUS_POINTS;
+let bountyNextRotateAt = Date.now() + 8_000;
+let currentEvent: ActiveMatchEventState = {
+  kind: "none",
+  title: "Kein Event",
+  description: "",
+  endsAt: 0,
+};
+let nextEventAt = Date.now() + 28_000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -357,6 +386,7 @@ function createStreamState(): StreamState {
     lastFullAt: 0,
     playerSignatures: new Map<string, string>(),
     pickupSignatures: new Map<string, string>(),
+    lastMetaSignature: "",
   };
 }
 
@@ -444,6 +474,146 @@ function hasActiveCombat(playersList: ServerPlayer[], now: number): boolean {
   return false;
 }
 
+function currentEventOrbMultiplier(): number {
+  return currentEvent.kind === "double_orbs" ? EVENT_DOUBLE_ORB_MULTIPLIER : 1;
+}
+
+function currentEventSpeedMultiplier(): number {
+  return currentEvent.kind === "haste" ? EVENT_HASTE_SPEED_MULTIPLIER : 1;
+}
+
+function currentBountyRewardPoints(): number {
+  return Math.max(BOUNTY_BONUS_POINTS, bountyBonusPoints);
+}
+
+function bountyRotateIntervalMs(): number {
+  return currentEvent.kind === "bounty_rush" ? 12_000 : BOUNTY_ROTATE_INTERVAL_MS;
+}
+
+function currentEventSnapshot(now: number): ActiveMatchEventSnapshot {
+  if (currentEvent.kind === "none") {
+    return {
+      kind: "none",
+      title: "Kein Event",
+      description: "",
+      msLeft: 0,
+    };
+  }
+
+  return {
+    kind: currentEvent.kind,
+    title: currentEvent.title,
+    description: currentEvent.description,
+    msLeft: Math.max(0, currentEvent.endsAt - now),
+  };
+}
+
+function chooseRandomEventKind(): MatchEventKind {
+  const pool: MatchEventKind[] = ["double_orbs", "haste", "bounty_rush"];
+  return pool[Math.floor(Math.random() * pool.length)] ?? "double_orbs";
+}
+
+function startMatchEvent(kind: MatchEventKind, now: number): void {
+  if (kind === "double_orbs") {
+    currentEvent = {
+      kind,
+      title: "ORB-SCHUB",
+      description: "Mass-Orbs bringen doppelte Masse.",
+      endsAt: now + MATCH_EVENT_DURATION_MS,
+    };
+  } else if (kind === "haste") {
+    currentEvent = {
+      kind,
+      title: "HASTE",
+      description: "Alle bewegen sich schneller.",
+      endsAt: now + MATCH_EVENT_DURATION_MS,
+    };
+  } else {
+    currentEvent = {
+      kind: "bounty_rush",
+      title: "BOUNTY RUSH",
+      description: "Kopfgeld-Kills geben mehr Punkte.",
+      endsAt: now + MATCH_EVENT_DURATION_MS,
+    };
+  }
+
+  if (currentEvent.kind === "bounty_rush") {
+    bountyBonusPoints = Math.round(BOUNTY_BONUS_POINTS * EVENT_BOUNTY_RUSH_MULTIPLIER);
+  } else {
+    bountyBonusPoints = BOUNTY_BONUS_POINTS;
+  }
+}
+
+function clearMatchEvent(now: number): void {
+  currentEvent = {
+    kind: "none",
+    title: "Kein Event",
+    description: "",
+    endsAt: 0,
+  };
+  bountyBonusPoints = BOUNTY_BONUS_POINTS;
+  nextEventAt = now + MATCH_EVENT_INTERVAL_MS;
+}
+
+function updateMatchEventState(now: number): void {
+  if (currentEvent.kind !== "none" && now >= currentEvent.endsAt) {
+    clearMatchEvent(now);
+  }
+
+  if (currentEvent.kind === "none" && now >= nextEventAt) {
+    startMatchEvent(chooseRandomEventKind(), now);
+  }
+}
+
+function chooseRandomBountyTarget(excludeId?: string): ServerPlayer | null {
+  const alivePlayers = Array.from(players.values()).filter((player) => {
+    if (!player.alive) {
+      return false;
+    }
+    if (excludeId && player.id === excludeId) {
+      return false;
+    }
+    return true;
+  });
+
+  if (alivePlayers.length < BOUNTY_MIN_PLAYERS) {
+    return null;
+  }
+
+  return alivePlayers[Math.floor(Math.random() * alivePlayers.length)] ?? null;
+}
+
+function rotateRandomBounty(now: number, force = false): void {
+  const currentTarget = bountyTargetId ? players.get(bountyTargetId) : undefined;
+  const currentValid = Boolean(currentTarget?.alive);
+
+  if (!force && currentValid && now < bountyNextRotateAt) {
+    return;
+  }
+
+  const nextTarget = chooseRandomBountyTarget(force ? bountyTargetId ?? undefined : undefined);
+  if (!nextTarget) {
+    bountyTargetId = null;
+    bountyNextRotateAt = now + bountyRotateIntervalMs();
+    return;
+  }
+
+  bountyTargetId = nextTarget.id;
+  bountyNextRotateAt = now + bountyRotateIntervalMs();
+}
+
+function updateBountyState(now: number): void {
+  const currentTarget = bountyTargetId ? players.get(bountyTargetId) : undefined;
+  const targetValid = Boolean(currentTarget?.alive);
+
+  if (!targetValid) {
+    rotateRandomBounty(now, true);
+    return;
+  }
+
+  rotateRandomBounty(now, false);
+}
+
 function playerSignature(player: PlayerSnapshot): string {
   const protectionBucket = Math.ceil(player.spawnProtectionMsLeft / 120);
   const speedBucket = Math.ceil(player.speedBoostMsLeft / 180);
@@ -528,6 +698,13 @@ function buildClientSnapshot(
 ): GameSnapshot | null {
   const visiblePlayers = visiblePlayersForClient(localPlayer, now);
   const visiblePickups = visiblePickupsForClient(localPlayer);
+  const activeEvent = currentEventSnapshot(now);
+  const metaSignature = [
+    bountyTargetId ?? "",
+    currentBountyRewardPoints(),
+    activeEvent.kind,
+    Math.ceil(activeEvent.msLeft / 1000),
+  ].join("|");
 
   const shouldFull =
     forceFull ||
@@ -549,6 +726,7 @@ function buildClientSnapshot(
     streamState.lastFullAt = now;
     streamState.playerSignatures = nextPlayerSignatures;
     streamState.pickupSignatures = nextPickupSignatures;
+    streamState.lastMetaSignature = metaSignature;
     return {
       tick,
       serverTime: now,
@@ -558,6 +736,9 @@ function buildClientSnapshot(
       removedPlayerIds: [],
       removedPickupIds: [],
       leaderboard,
+      bountyTargetId,
+      bountyBonus: currentBountyRewardPoints(),
+      activeEvent,
       debug,
     };
   }
@@ -576,15 +757,18 @@ function buildClientSnapshot(
   const removedPickupIds = Array.from(streamState.pickupSignatures.keys()).filter(
     (id) => !nextPickupSignatures.has(id),
   );
+  const metaChanged = metaSignature !== streamState.lastMetaSignature;
 
   streamState.playerSignatures = nextPlayerSignatures;
   streamState.pickupSignatures = nextPickupSignatures;
+  streamState.lastMetaSignature = metaSignature;
 
   if (
     changedPlayers.length === 0 &&
     changedPickups.length === 0 &&
     removedPlayerIds.length === 0 &&
-    removedPickupIds.length === 0
+    removedPickupIds.length === 0 &&
+    !metaChanged
   ) {
     return null;
   }
@@ -598,6 +782,9 @@ function buildClientSnapshot(
     removedPlayerIds,
     removedPickupIds,
     leaderboard,
+    bountyTargetId,
+    bountyBonus: currentBountyRewardPoints(),
+    activeEvent,
     debug,
   };
 }
@@ -697,9 +884,13 @@ function buildSnapshot(): GameSnapshot {
 
   return {
     tick,
-    serverTime: Date.now(),
+    serverTime: now,
     players: playerSnapshots,
     pickups: Array.from(pickups.values()),
+    leaderboard: buildLeaderboardEntries(),
+    bountyTargetId,
+    bountyBonus: currentBountyRewardPoints(),
+    activeEvent: currentEventSnapshot(now),
   };
 }
 
@@ -840,8 +1031,9 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
   applyMass(victim, -Math.max(0.6, victim.mass * 0.05));
 
   const scorerId = actorId ?? victim.lastThreatBy;
+  let scorer: ServerPlayer | undefined;
   if (scorerId && scorerId !== victim.id) {
-    const scorer = players.get(scorerId);
+    scorer = players.get(scorerId);
     if (scorer) {
       scorer.score += victimPoints;
       if (reason === "consume") {
@@ -850,6 +1042,14 @@ function knockOut(victim: ServerPlayer, actorId?: string, reason: "ringout" | "c
         applyMass(scorer, KILL_MASS_BONUS + victim.mass * 0.05);
       }
     }
+  }
+
+  if (victim.id === bountyTargetId) {
+    if (scorer && scorer.alive) {
+      scorer.score += currentBountyRewardPoints();
+      applyMass(scorer, BOUNTY_BONUS_MASS);
+    }
+    rotateRandomBounty(Date.now(), true);
   }
 }
 
@@ -959,6 +1159,8 @@ function spawnOrb(now: number): void {
 }
 
 function collectOrbs(playersList: ServerPlayer[], now: number): void {
+  const orbMultiplier = currentEventOrbMultiplier();
+
   for (const player of playersList) {
     const maxPickupDist = player.radius + Math.max(ORB_RADIUS, SPECIAL_PICKUP_RADIUS);
     const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(player.x / GRID_CELL)));
@@ -981,8 +1183,8 @@ function collectOrbs(playersList: ServerPlayer[], now: number): void {
 
           if (orb.kind === "mass") {
             const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
-            applyMass(player, orb.value * catchUpBonus);
-            player.score += Math.max(1, Math.round(orb.value * 1.4));
+            applyMass(player, orb.value * catchUpBonus * orbMultiplier);
+            player.score += Math.max(1, Math.round(orb.value * 1.4 * orbMultiplier));
           } else if (orb.kind === "speed") {
             player.speedBoostUntil = Math.max(player.speedBoostUntil, now + SPECIAL_SPEED_DURATION_MS);
             player.score += 3;
@@ -1167,6 +1369,8 @@ function tickSimulation(now: number, dt: number): void {
   const dragFactor = Math.pow(PLAYER_DRAG, dt / DT);
 
   maintainBots();
+  updateMatchEventState(now);
+  updateBountyState(now);
   spawnOrb(now);
   runAi(now);
   handleRespawns(now);
@@ -1184,6 +1388,7 @@ function tickSimulation(now: number, dt: number): void {
     lastLeaderboardAt = now;
   }
 
+  const eventSpeedMultiplier = currentEventSpeedMultiplier();
   for (const player of activePlayers) {
     const input = player.lastInput;
     let inputX = 0;
@@ -1195,8 +1400,11 @@ function tickSimulation(now: number, dt: number): void {
 
     const direction = normalize(inputX, inputY);
     const speedBoostActive = hasSpeedBoost(player, now);
-    const acceleration = accelerationForMass(player.mass) * (speedBoostActive ? SPEED_BOOST_MULTIPLIER : 1);
-    const maxSpeed = maxSpeedForMass(player.mass) * (speedBoostActive ? SPEED_BOOST_TOP_SPEED_MULTIPLIER : 1);
+    const boostAccelerationMultiplier = speedBoostActive ? SPEED_BOOST_MULTIPLIER : 1;
+    const boostSpeedMultiplier = speedBoostActive ? SPEED_BOOST_TOP_SPEED_MULTIPLIER : 1;
+    const acceleration =
+      accelerationForMass(player.mass) * boostAccelerationMultiplier * eventSpeedMultiplier;
+    const maxSpeed = maxSpeedForMass(player.mass) * boostSpeedMultiplier * eventSpeedMultiplier;
 
     player.vx += direction.x * acceleration * dt;
     player.vy += direction.y * acceleration * dt;
