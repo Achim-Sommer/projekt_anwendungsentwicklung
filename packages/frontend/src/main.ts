@@ -131,6 +131,9 @@ const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
 
 const QUALITY_STORAGE_KEY = "arena-quality-mode";
 const STATIC_CAMERA_ZOOM = 0.86;
+const SEMI_STATIC_CAMERA_LERP = 0.035;
+const SEMI_STATIC_DEADZONE_X_RATIO = 0.42;
+const SEMI_STATIC_DEADZONE_Y_RATIO = 0.36;
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
@@ -231,6 +234,7 @@ class GameScene extends Phaser.Scene {
   private lastHudUpdateAt = 0;
   private pickupsDirty = true;
   private lastPickupDrawAt = 0;
+  private cameraCenter = { x: Number.NaN, y: Number.NaN };
   private qualityMode: QualityMode = loadQualityMode();
   private qualityProfile: QualityProfile = QUALITY_PROFILES[this.qualityMode];
   private debugEnabled = false;
@@ -365,6 +369,8 @@ class GameScene extends Phaser.Scene {
     const camera = this.cameras.main;
     camera.stopFollow();
     camera.setZoom(STATIC_CAMERA_ZOOM);
+    this.cameraCenter.x = camera.midPoint.x;
+    this.cameraCenter.y = camera.midPoint.y;
 
     keyboard.on("keydown-F8", (event: KeyboardEvent) => {
       event.preventDefault();
@@ -414,6 +420,7 @@ class GameScene extends Phaser.Scene {
     this.flushPendingInput();
 
     this.updateRenderPlayers();
+    this.updateCamera();
     this.maybeRedrawPickups();
     this.drawPlayers();
   }
@@ -593,6 +600,76 @@ class GameScene extends Phaser.Scene {
     this.lastDebugUpdateAt = now;
   }
 
+  private clampCameraCenterToArena(centerX: number, centerY: number): { x: number; y: number } {
+    if (!this.arena) {
+      return { x: centerX, y: centerY };
+    }
+
+    const camera = this.cameras.main;
+    const halfW = camera.width / (2 * Math.max(0.0001, camera.zoom));
+    const halfH = camera.height / (2 * Math.max(0.0001, camera.zoom));
+
+    const minX = halfW;
+    const maxX = this.arena.width - halfW;
+    const minY = halfH;
+    const maxY = this.arena.height - halfH;
+
+    const safeX = minX > maxX ? this.arena.width / 2 : clamp(centerX, minX, maxX);
+    const safeY = minY > maxY ? this.arena.height / 2 : clamp(centerY, minY, maxY);
+    return { x: safeX, y: safeY };
+  }
+
+  private updateCamera(): void {
+    if (!this.arena) {
+      return;
+    }
+
+    const camera = this.cameras.main;
+    camera.stopFollow();
+    camera.setZoom(STATIC_CAMERA_ZOOM);
+
+    if (!Number.isFinite(this.cameraCenter.x) || !Number.isFinite(this.cameraCenter.y)) {
+      this.cameraCenter.x = this.arena.width / 2;
+      this.cameraCenter.y = this.arena.height / 2;
+    }
+
+    let targetX = this.cameraCenter.x;
+    let targetY = this.cameraCenter.y;
+
+    const localPlayer = this.getLocalPlayer();
+    if (localPlayer) {
+      const render = this.renderPlayers.get(localPlayer.id);
+      const px = render?.x ?? localPlayer.x;
+      const py = render?.y ?? localPlayer.y;
+
+      const halfW = camera.width / (2 * Math.max(0.0001, camera.zoom));
+      const halfH = camera.height / (2 * Math.max(0.0001, camera.zoom));
+      const deadzoneX = halfW * SEMI_STATIC_DEADZONE_X_RATIO;
+      const deadzoneY = halfH * SEMI_STATIC_DEADZONE_Y_RATIO;
+
+      if (px < targetX - deadzoneX) {
+        targetX = px + deadzoneX;
+      } else if (px > targetX + deadzoneX) {
+        targetX = px - deadzoneX;
+      }
+
+      if (py < targetY - deadzoneY) {
+        targetY = py + deadzoneY;
+      } else if (py > targetY + deadzoneY) {
+        targetY = py - deadzoneY;
+      }
+    }
+
+    const clampedTarget = this.clampCameraCenterToArena(targetX, targetY);
+    this.cameraCenter.x = Phaser.Math.Linear(this.cameraCenter.x, clampedTarget.x, SEMI_STATIC_CAMERA_LERP);
+    this.cameraCenter.y = Phaser.Math.Linear(this.cameraCenter.y, clampedTarget.y, SEMI_STATIC_CAMERA_LERP);
+
+    const clampedCenter = this.clampCameraCenterToArena(this.cameraCenter.x, this.cameraCenter.y);
+    this.cameraCenter.x = clampedCenter.x;
+    this.cameraCenter.y = clampedCenter.y;
+    camera.centerOn(this.cameraCenter.x, this.cameraCenter.y);
+  }
+
   private syncRenderPlayersFromSnapshot(force: boolean): void {
     if (!this.snapshot) {
       return;
@@ -731,7 +808,14 @@ class GameScene extends Phaser.Scene {
     camera.setBounds(0, 0, arenaWidth, arenaHeight);
     camera.stopFollow();
     camera.setZoom(STATIC_CAMERA_ZOOM);
-    camera.centerOn(arenaWidth / 2, arenaHeight / 2);
+    if (!Number.isFinite(this.cameraCenter.x) || !Number.isFinite(this.cameraCenter.y)) {
+      this.cameraCenter.x = arenaWidth / 2;
+      this.cameraCenter.y = arenaHeight / 2;
+    }
+    const clampedCenter = this.clampCameraCenterToArena(this.cameraCenter.x, this.cameraCenter.y);
+    this.cameraCenter.x = clampedCenter.x;
+    this.cameraCenter.y = clampedCenter.y;
+    camera.centerOn(this.cameraCenter.x, this.cameraCenter.y);
   }
 
   private updateHudDensity(): void {
@@ -750,42 +834,26 @@ class GameScene extends Phaser.Scene {
     }
     this.hazardLabels = [];
 
-    // Statische Ebene: Hintergrund und Bodenmuster. Diese Ebene wird nur bei Arena-Updates neu gezeichnet.
+    // Leichtgewichtiges Arena-Rendering fuer schwache Hardware.
     this.decorGraphics.clear();
     this.arenaGraphics.clear();
     this.hazardGraphics.clear();
     this.pickupGraphics.clear();
     this.arenaGraphics.fillStyle(0x172236, 1);
     this.arenaGraphics.fillRect(0, 0, this.arena.width, this.arena.height);
-    this.arenaGraphics.fillStyle(0x22344d, 0.96);
+    this.arenaGraphics.fillStyle(0x22344d, 0.94);
     this.arenaGraphics.fillRoundedRect(10, 10, this.arena.width - 20, this.arena.height - 20, 24);
 
-    // Panel-Tiles geben Struktur, ohne vom Gameplay abzulenken.
-    const drawFullDecor = this.scale.width >= 1100 && this.scale.height >= 700;
-    const tileSize = drawFullDecor ? 72 : 120;
-    for (let y = 24; y < this.arena.height - 24; y += tileSize) {
-      for (let x = 24; x < this.arena.width - 24; x += tileSize) {
-        const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
-        this.decorGraphics.fillStyle(isAlt ? 0x2a4362 : 0x314d70, drawFullDecor ? 0.48 : 0.32);
-        this.decorGraphics.fillRoundedRect(x, y, tileSize - 10, tileSize - 10, 8);
-      }
-    }
-
-    if (drawFullDecor) {
-      this.decorGraphics.lineStyle(1, 0x6f8aa8, 0.3);
-      for (let x = 24; x < this.arena.width - 20; x += tileSize) {
+    const minimalDecor = this.qualityMode === "low" || this.qualityMode === "normal";
+    if (!minimalDecor) {
+      this.decorGraphics.lineStyle(1, 0x456383, 0.22);
+      const step = 260;
+      for (let x = 40; x < this.arena.width - 20; x += step) {
         this.decorGraphics.lineBetween(x, 20, x, this.arena.height - 20);
       }
-      for (let y = 24; y < this.arena.height - 20; y += tileSize) {
+      for (let y = 40; y < this.arena.height - 20; y += step) {
         this.decorGraphics.lineBetween(20, y, this.arena.width - 20, y);
       }
-    }
-
-    if (drawFullDecor) {
-      this.decorGraphics.lineStyle(2, 0x22d3ee, 0.32);
-      this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 120);
-      this.decorGraphics.lineStyle(1, 0x38bdf8, 0.26);
-      this.decorGraphics.strokeCircle(this.arena.width / 2, this.arena.height / 2, 190);
     }
 
     this.arenaGraphics.lineStyle(3, 0x5aa8d8, 0.52);
