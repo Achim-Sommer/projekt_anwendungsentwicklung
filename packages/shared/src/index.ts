@@ -60,6 +60,15 @@ export interface PlayerSnapshot {
   alive: boolean;
 }
 
+export interface SnapshotDebugInfo {
+  serverTickMs: number;
+  snapshotRate: number;
+  leaderboardRate: number;
+  combatActive: boolean;
+  orbCount: number;
+  orbCap: number;
+}
+
 export interface GameSnapshot {
   tick: number;
   serverTime: number;
@@ -69,6 +78,7 @@ export interface GameSnapshot {
   removedPlayerIds?: string[];
   removedPickupIds?: string[];
   leaderboard?: LeaderboardEntry[];
+  debug?: SnapshotDebugInfo;
 }
 
 export interface WelcomePayload {
@@ -89,12 +99,23 @@ export interface PlayerInputPayload {
   right: boolean;
 }
 
+export interface DebugPingPayload {
+  clientSentAt: number;
+}
+
+export interface DebugPongPayload {
+  clientSentAt: number;
+  serverTime: number;
+}
+
 export interface ServerToClientEvents {
   welcome: (payload: WelcomePayload) => void;
   snapshot: (payload: GameSnapshot) => void;
   playerLeft: (payload: PlayerLeftPayload) => void;
+  debugPong: (payload: DebugPongPayload) => void;
 }
 
 export interface ClientToServerEvents {
   input: (payload: PlayerInputPayload) => void;
+  debugPing: (payload: DebugPingPayload) => void;
 }

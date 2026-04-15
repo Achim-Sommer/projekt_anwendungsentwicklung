@@ -3,12 +3,14 @@ import { io, type Socket } from "socket.io-client";
 import type {
   ArenaState,
   ClientToServerEvents,
+  DebugPongPayload,
   ForceOrb,
   GameSnapshot,
   HazardZone,
   PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
+  SnapshotDebugInfo,
   ServerToClientEvents,
 } from "@projekt/shared";
 
@@ -58,6 +60,88 @@ if (!hudStatus || !hudPlayer || !hudScoreboard) {
 const hudStatusElement = hudStatus;
 const hudPlayerElement = hudPlayer;
 const hudScoreboardElement = hudScoreboard;
+
+const existingDebugOverlay = document.getElementById("hud-debug");
+const debugOverlayElement =
+  existingDebugOverlay instanceof HTMLPreElement
+    ? existingDebugOverlay
+    : document.createElement("pre");
+if (!(existingDebugOverlay instanceof HTMLPreElement)) {
+  debugOverlayElement.id = "hud-debug";
+  debugOverlayElement.style.position = "fixed";
+  debugOverlayElement.style.left = "12px";
+  debugOverlayElement.style.bottom = "12px";
+  debugOverlayElement.style.margin = "0";
+  debugOverlayElement.style.padding = "8px 10px";
+  debugOverlayElement.style.borderRadius = "8px";
+  debugOverlayElement.style.background = "rgba(2, 6, 23, 0.8)";
+  debugOverlayElement.style.color = "#dbeafe";
+  debugOverlayElement.style.font = "12px/1.4 Consolas, Menlo, monospace";
+  debugOverlayElement.style.pointerEvents = "none";
+  debugOverlayElement.style.zIndex = "24";
+  debugOverlayElement.style.display = "none";
+  document.body.appendChild(debugOverlayElement);
+}
+
+type QualityMode = "low" | "normal" | "high";
+
+interface QualityProfile {
+  inputIntervalMs: number;
+  hudIntervalMs: number;
+  pickupRedrawIntervalMs: number;
+  pickupCameraMoveThreshold: number;
+  pickupMargin: number;
+  pickupDetail: "low" | "normal" | "high";
+  maxNameLabels: number;
+  nameLabelDistance: number;
+  debugIntervalMs: number;
+}
+
+const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
+  low: {
+    inputIntervalMs: 34,
+    hudIntervalMs: 125,
+    pickupRedrawIntervalMs: 220,
+    pickupCameraMoveThreshold: 36,
+    pickupMargin: 28,
+    pickupDetail: "low",
+    maxNameLabels: 8,
+    nameLabelDistance: 380,
+    debugIntervalMs: 250,
+  },
+  normal: {
+    inputIntervalMs: 33,
+    hudIntervalMs: 110,
+    pickupRedrawIntervalMs: 150,
+    pickupCameraMoveThreshold: 26,
+    pickupMargin: 42,
+    pickupDetail: "normal",
+    maxNameLabels: 14,
+    nameLabelDistance: 520,
+    debugIntervalMs: 220,
+  },
+  high: {
+    inputIntervalMs: 33,
+    hudIntervalMs: 95,
+    pickupRedrawIntervalMs: 95,
+    pickupCameraMoveThreshold: 20,
+    pickupMargin: 56,
+    pickupDetail: "high",
+    maxNameLabels: 22,
+    nameLabelDistance: 700,
+    debugIntervalMs: 180,
+  },
+};
+
+const QUALITY_STORAGE_KEY = "arena-quality-mode";
+
+function loadQualityMode(): QualityMode {
+  const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
+  if (stored === "low" || stored === "high" || stored === "normal") {
+    return stored;
+  }
+  return "normal";
+}
 
 let playerName = "";
 
@@ -140,8 +224,23 @@ class GameScene extends Phaser.Scene {
   private localPlayerId = "";
   private inputSeq = 0;
   private lastInputSentAt = 0;
+  private lastSentInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
+  private pendingInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
   private hudCompact = false;
   private leaderboardLines = 8;
+  private hudDirty = true;
+  private lastHudUpdateAt = 0;
+  private pickupsDirty = true;
+  private lastPickupDrawAt = 0;
+  private lastPickupCameraState = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN };
+  private qualityMode: QualityMode = loadQualityMode();
+  private qualityProfile: QualityProfile = QUALITY_PROFILES[this.qualityMode];
+  private debugEnabled = false;
+  private lastDebugUpdateAt = 0;
+  private latestSnapshotBytes = 0;
+  private latestRttMs: number | null = null;
+  private lastPingSentAt = 0;
+  private latestServerDebug: SnapshotDebugInfo | null = null;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -162,45 +261,64 @@ class GameScene extends Phaser.Scene {
   }) => void;
   private readonly onSnapshot: (payload: GameSnapshot) => void;
   private readonly onPlayerLeft: () => void;
+  private readonly onDebugPong: (payload: DebugPongPayload) => void;
 
   constructor() {
     super({ key: "GameScene" });
-    this.onConnect = () => this.updateStatus();
+    this.onConnect = () => {
+      this.updateStatus();
+      this.hudDirty = true;
+    };
     this.onDisconnect = () => {
       this.updateStatus();
+      this.hudDirty = true;
     };
     this.onConnectError = () => {
       this.updateStatus();
+      this.hudDirty = true;
     };
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
       this.arena = payload.arena;
       this.applyIncomingSnapshot(payload.snapshot);
       this.syncRenderPlayersFromSnapshot(true);
+      this.lastSentInput = null;
+      this.pendingInput = null;
       this.resizeToArena();
       this.updateStatus();
       this.drawArena();
       this.drawHazards();
-      this.drawPickups();
+      this.pickupsDirty = true;
       this.drawPlayers();
-      this.updateHud();
+      this.hudDirty = true;
+      this.maybeRedrawPickups(true);
+      this.maybeUpdateHud(true);
+      this.maybeUpdateDebugOverlay(true);
     };
     this.onSnapshot = (payload) => {
+      this.latestServerDebug = payload.debug ?? this.latestServerDebug;
+      if (this.debugEnabled) {
+        this.latestSnapshotBytes = JSON.stringify(payload).length;
+      }
       this.applyIncomingSnapshot(payload);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
-      this.drawPickups();
-      this.updateHud();
+      this.pickupsDirty = true;
+      this.hudDirty = true;
     };
     this.onPlayerLeft = () => {
       this.drawPlayers();
-      this.updateHud();
+      this.hudDirty = true;
+    };
+    this.onDebugPong = (payload) => {
+      this.latestRttMs = Math.max(0, Date.now() - payload.clientSentAt);
     };
   }
 
   create(): void {
     this.cameras.main.setBackgroundColor(0x1e293b);
     this.cameras.main.roundPixels = false;
+    this.applyQualityProfile();
 
     this.arenaGraphics = this.add.graphics();
     this.hazardGraphics = this.add.graphics();
@@ -231,16 +349,32 @@ class GameScene extends Phaser.Scene {
 
     this.scale.on("resize", () => {
       this.updateHudDensity();
-      this.updateHud();
+      this.hudDirty = true;
+      this.pickupsDirty = true;
+      this.maybeUpdateHud(true);
     });
     window.addEventListener("resize", this.handleWindowResize);
 
     this.updateStatus();
-    this.updateHud();
+    this.hudDirty = true;
+    this.maybeUpdateHud(true);
 
     const camera = this.cameras.main;
     camera.startFollow(this.cameraTarget, true, 0.12, 0.12);
     camera.setDeadzone(130, 90);
+
+    keyboard.on("keydown-F8", (event: KeyboardEvent) => {
+      event.preventDefault();
+      this.cycleQualityMode();
+    });
+    keyboard.on("keydown-F3", (event: KeyboardEvent) => {
+      event.preventDefault();
+      this.debugEnabled = !this.debugEnabled;
+      debugOverlayElement.style.display = this.debugEnabled ? "block" : "none";
+      if (!this.debugEnabled) {
+        debugOverlayElement.textContent = "";
+      }
+    });
 
     socket.on("connect", this.onConnect);
     socket.on("disconnect", this.onDisconnect);
@@ -248,34 +382,37 @@ class GameScene extends Phaser.Scene {
     socket.on("welcome", this.onWelcome);
     socket.on("snapshot", this.onSnapshot);
     socket.on("playerLeft", this.onPlayerLeft);
+    socket.on("debugPong", this.onDebugPong);
   }
 
   update(): void {
+    const now = this.time.now;
+
+    if (socket.connected && now - this.lastPingSentAt >= 1000) {
+      socket.emit("debugPing", { clientSentAt: Date.now() });
+      this.lastPingSentAt = now;
+    }
+
+    this.maybeUpdateHud();
+    this.maybeUpdateDebugOverlay();
+
     if (!socket.connected) {
       return;
     }
 
     const player = this.getLocalPlayer();
     if (!player) {
+      this.maybeRedrawPickups();
       return;
     }
 
     const moveInput = this.getMovementInput(player);
-    const payload: PlayerInputPayload = {
-      seq: this.inputSeq++,
-      up: moveInput.up,
-      down: moveInput.down,
-      left: moveInput.left,
-      right: moveInput.right,
-    };
-
-    if (this.time.now - this.lastInputSentAt >= 16) {
-      socket.emit("input", payload);
-      this.lastInputSentAt = this.time.now;
-    }
+    this.scheduleInputSend(moveInput);
+    this.flushPendingInput();
 
     this.updateRenderPlayers();
     this.updateCamera(player);
+    this.maybeRedrawPickups();
     this.drawPlayers();
   }
 
@@ -318,6 +455,140 @@ class GameScene extends Phaser.Scene {
       left: nx < -0.28,
       right: nx > 0.28,
     };
+  }
+
+  private inputStatesEqual(
+    a: { up: boolean; down: boolean; left: boolean; right: boolean },
+    b: { up: boolean; down: boolean; left: boolean; right: boolean },
+  ): boolean {
+    return a.up === b.up && a.down === b.down && a.left === b.left && a.right === b.right;
+  }
+
+  private scheduleInputSend(input: { up: boolean; down: boolean; left: boolean; right: boolean }): void {
+    if (this.lastSentInput && this.inputStatesEqual(input, this.lastSentInput)) {
+      this.pendingInput = null;
+      return;
+    }
+
+    if (!this.pendingInput || !this.inputStatesEqual(input, this.pendingInput)) {
+      this.pendingInput = { ...input };
+    }
+  }
+
+  private flushPendingInput(): void {
+    if (!this.pendingInput) {
+      return;
+    }
+    if (this.time.now - this.lastInputSentAt < this.qualityProfile.inputIntervalMs) {
+      return;
+    }
+
+    const payload: PlayerInputPayload = {
+      seq: this.inputSeq++,
+      up: this.pendingInput.up,
+      down: this.pendingInput.down,
+      left: this.pendingInput.left,
+      right: this.pendingInput.right,
+    };
+    socket.emit("input", payload);
+    this.lastInputSentAt = this.time.now;
+    this.lastSentInput = this.pendingInput;
+    this.pendingInput = null;
+  }
+
+  private applyQualityProfile(): void {
+    this.qualityProfile = QUALITY_PROFILES[this.qualityMode];
+    this.hudDirty = true;
+    this.pickupsDirty = true;
+    this.updateStatus();
+  }
+
+  private cycleQualityMode(): void {
+    this.qualityMode =
+      this.qualityMode === "low"
+        ? "normal"
+        : this.qualityMode === "normal"
+          ? "high"
+          : "low";
+    window.localStorage.setItem(QUALITY_STORAGE_KEY, this.qualityMode);
+    this.applyQualityProfile();
+    this.maybeRedrawPickups(true);
+    this.maybeUpdateHud(true);
+    this.maybeUpdateDebugOverlay(true);
+  }
+
+  private maybeUpdateHud(force = false): void {
+    if (!this.hudDirty && !force) {
+      return;
+    }
+
+    const now = this.time.now;
+    if (!force && now - this.lastHudUpdateAt < this.qualityProfile.hudIntervalMs) {
+      return;
+    }
+
+    this.updateHud();
+    this.lastHudUpdateAt = now;
+    this.hudDirty = false;
+  }
+
+  private maybeRedrawPickups(force = false): void {
+    if (!this.snapshot) {
+      return;
+    }
+
+    const camera = this.cameras.main;
+    const cameraMoved =
+      !Number.isFinite(this.lastPickupCameraState.x) ||
+      Math.abs(camera.scrollX - this.lastPickupCameraState.x) >= this.qualityProfile.pickupCameraMoveThreshold ||
+      Math.abs(camera.scrollY - this.lastPickupCameraState.y) >= this.qualityProfile.pickupCameraMoveThreshold ||
+      Math.abs(camera.zoom - this.lastPickupCameraState.zoom) >= 0.02;
+
+    const now = this.time.now;
+    const due = now - this.lastPickupDrawAt >= this.qualityProfile.pickupRedrawIntervalMs;
+    if (!force && (!due || (!this.pickupsDirty && !cameraMoved))) {
+      return;
+    }
+
+    this.drawPickups();
+    this.lastPickupDrawAt = now;
+    this.pickupsDirty = false;
+    this.lastPickupCameraState.x = camera.scrollX;
+    this.lastPickupCameraState.y = camera.scrollY;
+    this.lastPickupCameraState.zoom = camera.zoom;
+  }
+
+  private maybeUpdateDebugOverlay(force = false): void {
+    if (!this.debugEnabled) {
+      return;
+    }
+
+    const now = this.time.now;
+    if (!force && now - this.lastDebugUpdateAt < this.qualityProfile.debugIntervalMs) {
+      return;
+    }
+
+    const fps = this.game.loop.actualFps;
+    const frameMs = this.game.loop.delta;
+    const rttText = this.latestRttMs == null ? "-" : `${Math.round(this.latestRttMs)} ms`;
+    const snapshotKb = (this.latestSnapshotBytes / 1024).toFixed(1);
+    const serverTick = this.latestServerDebug?.serverTickMs ?? 0;
+    const snapshotRate = this.latestServerDebug?.snapshotRate ?? 0;
+    const leaderboardRate = this.latestServerDebug?.leaderboardRate ?? 0;
+    const combat = this.latestServerDebug?.combatActive ? "yes" : "no";
+    const orbInfo = this.latestServerDebug
+      ? `${this.latestServerDebug.orbCount}/${this.latestServerDebug.orbCap}`
+      : "-";
+
+    debugOverlayElement.textContent = [
+      `Q:${this.qualityMode.toUpperCase()}  FPS:${fps.toFixed(1)}  Frame:${frameMs.toFixed(1)}ms`,
+      `RTT:${rttText}  Snapshot:${snapshotKb} KB`,
+      `SrvTick:${serverTick}ms  SnapRate:${snapshotRate}  LB:${leaderboardRate}`,
+      `Combat:${combat}  Orbs:${orbInfo}`,
+      "F8: Quality  F3: Debug",
+    ].join("\n");
+
+    this.lastDebugUpdateAt = now;
   }
 
   private updateCamera(localPlayer: PlayerSnapshot): void {
@@ -393,6 +664,7 @@ class GameScene extends Phaser.Scene {
       players: Array.from(this.snapshotPlayers.values()),
       pickups: Array.from(this.snapshotPickups.values()),
       leaderboard: payload.leaderboard ?? this.snapshot?.leaderboard,
+      debug: payload.debug ?? this.snapshot?.debug,
     };
   }
 
@@ -541,7 +813,7 @@ class GameScene extends Phaser.Scene {
     }
 
     const view = this.cameras.main.worldView;
-    const margin = 50;
+    const margin = this.qualityProfile.pickupMargin;
     this.pickupGraphics.clear();
     for (const orb of this.snapshot.pickups) {
       if (
@@ -565,10 +837,23 @@ class GameScene extends Phaser.Scene {
     };
 
     const style = styleByKind[orb.kind] ?? styleByKind.mass;
+    const detail = this.qualityProfile.pickupDetail;
+
+    if (detail === "low") {
+      this.pickupGraphics.fillStyle(style.core, style.alpha * 0.9);
+      this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.3);
+      return;
+    }
+
     this.pickupGraphics.fillStyle(style.core, style.alpha);
     this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7);
     this.pickupGraphics.lineStyle(1, style.ring, 0.62);
     this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.2);
+
+    if (detail === "high") {
+      this.pickupGraphics.lineStyle(1, 0xffffff, 0.22);
+      this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.4);
+    }
   }
 
   private drawHazards(): void {
@@ -700,7 +985,14 @@ class GameScene extends Phaser.Scene {
       visiblePlayers.push(player);
     }
 
-    const showNameLabels = visiblePlayers.length <= 28;
+    const showNameLabels = visiblePlayers.length <= this.qualityProfile.maxNameLabels + 6;
+    const localRender = this.localPlayerId ? this.renderPlayers.get(this.localPlayerId) : undefined;
+    const localPlayer = this.getLocalPlayer();
+    const localX = localRender?.x ?? localPlayer?.x ?? 0;
+    const localY = localRender?.y ?? localPlayer?.y ?? 0;
+    const nameDistanceSq = this.qualityProfile.nameLabelDistance * this.qualityProfile.nameLabelDistance;
+    let shownLabels = 0;
+    const drawnIds = new Set<string>();
 
     for (const player of visiblePlayers) {
       const hasSpawnProtection = player.spawnProtectionMsLeft > 0;
@@ -734,7 +1026,16 @@ class GameScene extends Phaser.Scene {
 
       const labelOffsetY = Math.max(20, player.radius + 13);
       label.setPosition(px, py - labelOffsetY);
-      label.setVisible(showNameLabels || player.id === this.localPlayerId);
+      const dxToLocal = px - localX;
+      const dyToLocal = py - localY;
+      const withinDistance = dxToLocal * dxToLocal + dyToLocal * dyToLocal <= nameDistanceSq;
+      const canShowLabel =
+        player.id === this.localPlayerId ||
+        (showNameLabels && withinDistance && shownLabels < this.qualityProfile.maxNameLabels);
+      label.setVisible(canShowLabel);
+      if (canShowLabel && player.id !== this.localPlayerId) {
+        shownLabels += 1;
+      }
       const botMarker = player.isBot ? " [BOT]" : "";
       const shieldMarker = hasSpawnProtection ? " [SAFE]" : "";
       const invulnMarker = player.invulnerableMsLeft > 0 ? " [INV]" : "";
@@ -744,6 +1045,7 @@ class GameScene extends Phaser.Scene {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
       }
+      drawnIds.add(player.id);
     }
 
     const aliveIds = new Set<string>();
@@ -758,6 +1060,8 @@ class GameScene extends Phaser.Scene {
         label.destroy();
         this.nameLabels.delete(playerId);
         this.lastLabelText.delete(playerId);
+      } else if (!drawnIds.has(playerId)) {
+        label.setVisible(false);
       } else if (!showNameLabels && playerId !== this.localPlayerId) {
         label.setVisible(false);
       }
@@ -812,10 +1116,11 @@ class GameScene extends Phaser.Scene {
   }
 
   private updateStatus(): void {
+    const qualityText = `Qualitaet: ${this.qualityMode.toUpperCase()} (F8)`;
     if (socket.connected) {
-      hudStatusElement.textContent = `Online als ${playerName || "Spieler"}`;
+      hudStatusElement.textContent = `Online als ${playerName || "Spieler"} | ${qualityText}`;
     } else {
-      hudStatusElement.textContent = "Warte auf Lobby-Start…";
+      hudStatusElement.textContent = `Warte auf Lobby-Start… | ${qualityText}`;
     }
   }
 
@@ -826,6 +1131,7 @@ class GameScene extends Phaser.Scene {
     socket.off("welcome", this.onWelcome);
     socket.off("snapshot", this.onSnapshot);
     socket.off("playerLeft", this.onPlayerLeft);
+    socket.off("debugPong", this.onDebugPong);
     for (const label of this.hazardLabels) {
       label.destroy();
     }
@@ -835,6 +1141,9 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
+    this.debugEnabled = false;
+    debugOverlayElement.style.display = "none";
+    debugOverlayElement.textContent = "";
     window.removeEventListener("resize", this.handleWindowResize);
   }
 }

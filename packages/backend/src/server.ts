@@ -5,20 +5,28 @@ import { Server } from "socket.io";
 import type {
   ArenaState,
   ClientToServerEvents,
+  DebugPongPayload,
   ForceOrb,
   GameSnapshot,
   LeaderboardEntry,
   PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
+  SnapshotDebugInfo,
   ServerToClientEvents,
   SkinId,
 } from "@projekt/shared";
 
 const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 60;
-const SNAPSHOT_RATE = 30;
+const SNAPSHOT_RATE_IDLE = 20;
+const SNAPSHOT_RATE_COMBAT = 30;
+const LEADERBOARD_RATE_IDLE = 2;
+const LEADERBOARD_RATE_COMBAT = 4;
 const DT = 1 / TICK_RATE;
+const FIXED_STEP_MS = 1000 / TICK_RATE;
+const SIM_LOOP_INTERVAL_MS = 5;
+const MAX_SIM_STEPS_PER_FRAME = 5;
 const STREAM_PLAYER_RADIUS = 980;
 const STREAM_PICKUP_RADIUS = 1120;
 const STREAM_FULL_RESYNC_MS = 8000;
@@ -37,6 +45,9 @@ const SPAWN_ATTEMPTS = 40;
 const TARGET_TOTAL_PLAYERS = 4;
 
 const ORB_SPAWN_INTERVAL_MS = 420;
+const ORB_BASE_COUNT = 52;
+const ORB_PER_ACTIVE_PLAYER = 22;
+const ORB_MIN_COUNT = 72;
 const ORB_MAX_COUNT = 140;
 const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 8;
@@ -216,10 +227,17 @@ const streamStates = new Map<string, StreamState>();
 
 let tick = 0;
 let lastSnapshotAt = 0;
+let lastLeaderboardAt = 0;
+let leaderboardCache: LeaderboardEntry[] = [];
 let botCounter = 1;
 let orbCounter = 1;
 let lastOrbSpawnAt = 0;
-let lastTickMs = Date.now();
+let lastTickDurationMs = 0;
+let currentSnapshotRate = SNAPSHOT_RATE_IDLE;
+let currentLeaderboardRate = LEADERBOARD_RATE_IDLE;
+let combatBoostUntil = 0;
+let loopAccumulatorMs = 0;
+let lastLoopAt = Date.now();
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -376,6 +394,56 @@ function buildLeaderboardEntries(): LeaderboardEntry[] {
     }));
 }
 
+function adaptiveOrbCap(): number {
+  let activePlayers = 0;
+  for (const player of players.values()) {
+    if (player.alive) {
+      activePlayers += 1;
+    }
+  }
+
+  const target = ORB_BASE_COUNT + activePlayers * ORB_PER_ACTIVE_PLAYER;
+  return clamp(target, ORB_MIN_COUNT, ORB_MAX_COUNT);
+}
+
+function hasActiveCombat(playersList: ServerPlayer[], now: number): boolean {
+  if (combatBoostUntil > now) {
+    return true;
+  }
+
+  for (let i = 0; i < playersList.length; i += 1) {
+    const a = playersList[i];
+    if (!a.alive) {
+      continue;
+    }
+
+    for (let j = i + 1; j < playersList.length; j += 1) {
+      const b = playersList[j];
+      if (!b.alive) {
+        continue;
+      }
+      if (a.spawnProtectedUntil > now || b.spawnProtectedUntil > now) {
+        continue;
+      }
+
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const engageRadius = a.radius + b.radius + 130;
+      if (dx * dx + dy * dy > engageRadius * engageRadius) {
+        continue;
+      }
+
+      const bigger = Math.max(a.mass, b.mass);
+      const smaller = Math.max(1, Math.min(a.mass, b.mass));
+      if (bigger / smaller >= 1.08) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function playerSignature(player: PlayerSnapshot): string {
   const protectionBucket = Math.ceil(player.spawnProtectionMsLeft / 120);
   const speedBucket = Math.ceil(player.speedBoostMsLeft / 180);
@@ -464,6 +532,7 @@ function buildClientSnapshot(
   localPlayer: ServerPlayer,
   now: number,
   leaderboard: LeaderboardEntry[],
+  debug: SnapshotDebugInfo,
   streamState: StreamState,
   forceFull = false,
 ): GameSnapshot | null {
@@ -499,6 +568,7 @@ function buildClientSnapshot(
       removedPlayerIds: [],
       removedPickupIds: [],
       leaderboard,
+      debug,
     };
   }
 
@@ -538,11 +608,11 @@ function buildClientSnapshot(
     removedPlayerIds,
     removedPickupIds,
     leaderboard,
+    debug,
   };
 }
 
-function emitSnapshots(now: number): void {
-  const leaderboard = buildLeaderboardEntries();
+function emitSnapshots(now: number, leaderboard: LeaderboardEntry[], debug: SnapshotDebugInfo): void {
 
   for (const [socketId, socket] of io.sockets.sockets) {
     const localPlayer = players.get(socketId);
@@ -557,7 +627,7 @@ function emitSnapshots(now: number): void {
     }
 
     const filteredLeaderboard = filterLeaderboardForClient(localPlayer, leaderboard, now);
-    const snapshot = buildClientSnapshot(localPlayer, now, filteredLeaderboard, streamState);
+    const snapshot = buildClientSnapshot(localPlayer, now, filteredLeaderboard, debug, streamState);
     if (snapshot) {
       socket.emit("snapshot", snapshot);
     }
@@ -830,6 +900,7 @@ function resolveConsumptions(playersList: ServerPlayer[], now: number): void {
 
       victim.lastThreatBy = eater.id;
       knockOut(victim, eater.id, "consume");
+      combatBoostUntil = Math.max(combatBoostUntil, now + 2200);
     }
   }
 }
@@ -861,7 +932,7 @@ function handleRespawns(now: number): void {
 }
 
 function spawnOrb(now: number): void {
-  if (pickups.size >= ORB_MAX_COUNT || now - lastOrbSpawnAt < ORB_SPAWN_INTERVAL_MS) {
+  if (pickups.size >= adaptiveOrbCap() || now - lastOrbSpawnAt < ORB_SPAWN_INTERVAL_MS) {
     return;
   }
 
@@ -1101,11 +1172,8 @@ function maintainBots(): void {
   }
 }
 
-function tickSimulation(): void {
+function tickSimulation(now: number, dt: number): void {
   tick += 1;
-  const now = Date.now();
-  const dt = Math.min((now - lastTickMs) / 1000, DT * 3);
-  lastTickMs = now;
   const dragFactor = Math.pow(PLAYER_DRAG, dt / DT);
 
   maintainBots();
@@ -1114,6 +1182,17 @@ function tickSimulation(): void {
   handleRespawns(now);
 
   const activePlayers = Array.from(players.values()).filter((player) => player.alive);
+  const combatActive = hasActiveCombat(activePlayers, now);
+  currentSnapshotRate = combatActive ? SNAPSHOT_RATE_COMBAT : SNAPSHOT_RATE_IDLE;
+  currentLeaderboardRate = combatActive ? LEADERBOARD_RATE_COMBAT : LEADERBOARD_RATE_IDLE;
+
+  if (
+    leaderboardCache.length === 0 ||
+    now - lastLeaderboardAt >= 1000 / currentLeaderboardRate
+  ) {
+    leaderboardCache = buildLeaderboardEntries();
+    lastLeaderboardAt = now;
+  }
 
   for (const player of activePlayers) {
     const input = player.lastInput;
@@ -1184,8 +1263,18 @@ function tickSimulation(): void {
     }
   }
 
-  if (now - lastSnapshotAt >= 1000 / SNAPSHOT_RATE) {
-    emitSnapshots(now);
+  lastTickDurationMs = Math.max(0, Date.now() - now);
+
+  if (now - lastSnapshotAt >= 1000 / currentSnapshotRate) {
+    const debugInfo: SnapshotDebugInfo = {
+      serverTickMs: lastTickDurationMs,
+      snapshotRate: currentSnapshotRate,
+      leaderboardRate: currentLeaderboardRate,
+      combatActive,
+      orbCount: pickups.size,
+      orbCap: adaptiveOrbCap(),
+    };
+    emitSnapshots(now, leaderboardCache, debugInfo);
     lastSnapshotAt = now;
   }
 }
@@ -1209,6 +1298,14 @@ io.on("connection", (socket) => {
     player,
     Date.now(),
     buildLeaderboardEntries(),
+    {
+      serverTickMs: lastTickDurationMs,
+      snapshotRate: currentSnapshotRate,
+      leaderboardRate: currentLeaderboardRate,
+      combatActive: false,
+      orbCount: pickups.size,
+      orbCap: adaptiveOrbCap(),
+    },
     streamStates.get(socket.id) ?? createStreamState(),
     true,
   ) ?? buildSnapshot();
@@ -1227,6 +1324,14 @@ io.on("connection", (socket) => {
     current.lastInput = payload;
   });
 
+  socket.on("debugPing", (payload) => {
+    const pongPayload: DebugPongPayload = {
+      clientSentAt: payload.clientSentAt,
+      serverTime: Date.now(),
+    };
+    socket.emit("debugPong", pongPayload);
+  });
+
   socket.on("disconnect", () => {
     console.log(`[Server] Player disconnected: id=${socket.id}`);
     players.delete(player.id);
@@ -1236,7 +1341,27 @@ io.on("connection", (socket) => {
   });
 });
 
-setInterval(tickSimulation, 1000 / TICK_RATE);
+function runSimulationLoop(): void {
+  const loopNow = Date.now();
+  const elapsedMs = Math.min(250, Math.max(0, loopNow - lastLoopAt));
+  lastLoopAt = loopNow;
+  loopAccumulatorMs += elapsedMs;
+
+  let steps = 0;
+  while (loopAccumulatorMs >= FIXED_STEP_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
+    const tickNow = Date.now();
+    tickSimulation(tickNow, DT);
+    loopAccumulatorMs -= FIXED_STEP_MS;
+    steps += 1;
+  }
+
+  if (steps >= MAX_SIM_STEPS_PER_FRAME) {
+    // Verhindert einen Spiral-of-Death bei kurzfristigen Lastspitzen.
+    loopAccumulatorMs = Math.min(loopAccumulatorMs, FIXED_STEP_MS * 2);
+  }
+}
+
+setInterval(runSimulationLoop, SIM_LOOP_INTERVAL_MS);
 
 httpServer.listen(PORT, () => {
   console.log(`[Server] Listening on http://localhost:${PORT}`);
