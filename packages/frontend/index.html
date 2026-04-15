@@ -13,15 +13,26 @@
 
       :root {
         color-scheme: dark;
+        --bg-deep: #071325;
+        --bg-mid: #132742;
+        --accent: #22c55e;
+        --accent-2: #38bdf8;
+        --accent-warm: #f59e0b;
+        --text-main: #f8fafc;
+        --text-sub: #94a3b8;
       }
 
       body {
-        background: radial-gradient(circle at 25% 20%, #1f2950 0%, #0f1428 55%, #090d1a 100%);
+        background:
+          radial-gradient(circle at 16% 12%, rgba(34, 197, 94, 0.18), transparent 34%),
+          radial-gradient(circle at 85% 84%, rgba(56, 189, 248, 0.16), transparent 36%),
+          radial-gradient(circle at 68% 18%, rgba(245, 158, 11, 0.14), transparent 32%),
+          linear-gradient(140deg, var(--bg-deep) 0%, var(--bg-mid) 58%, #1f3456 100%);
         display: flex;
         justify-content: center;
         align-items: center;
         min-height: 100vh;
-        font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
         overflow: hidden;
       }
 
@@ -31,8 +42,9 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(7, 10, 20, 0.78);
-        backdrop-filter: blur(8px);
+        padding: 10px;
+        background: rgba(5, 15, 27, 0.62);
+        backdrop-filter: blur(6px);
         z-index: 999;
       }
 
@@ -41,42 +53,49 @@
       }
 
       .name-card {
-        width: min(92vw, 430px);
-        background: linear-gradient(180deg, rgba(33, 42, 86, 0.96) 0%, rgba(17, 24, 39, 0.97) 100%);
-        border: 1px solid rgba(148, 163, 184, 0.32);
-        border-radius: 16px;
-        padding: 22px;
-        box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
+        width: min(92vw, 460px);
+        max-height: min(92vh, 520px);
+        background: linear-gradient(160deg, rgba(12, 29, 45, 0.95), rgba(14, 36, 58, 0.96));
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 20px;
+        padding: 24px;
+        overflow: auto;
+        box-shadow:
+          0 22px 58px rgba(1, 8, 18, 0.55),
+          0 0 0 1px rgba(34, 211, 238, 0.18) inset;
       }
 
       .name-card h1 {
-        font-size: 22px;
-        color: #e2e8f0;
-        margin-bottom: 6px;
-        letter-spacing: 0.02em;
+        font-size: clamp(20px, 4.3vw, 28px);
+        color: var(--text-main);
+        margin-bottom: 10px;
+        letter-spacing: 0.01em;
+        text-transform: none;
       }
 
       .name-card p {
-        color: #94a3b8;
-        font-size: 14px;
-        margin-bottom: 14px;
+        color: var(--text-sub);
+        font-size: clamp(12px, 2.3vw, 14px);
+        margin-bottom: 16px;
         line-height: 1.4;
       }
 
       #name-input {
         width: 100%;
-        border: 1px solid rgba(148, 163, 184, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.32);
         border-radius: 12px;
-        padding: 12px 14px;
-        background: rgba(2, 6, 23, 0.62);
-        color: #f8fafc;
-        font-size: 16px;
+        padding: 13px 14px;
+        background: rgba(7, 19, 34, 0.72);
+        color: var(--text-main);
+        font-size: 17px;
+        letter-spacing: 0.03em;
         outline: none;
-        transition: border-color 0.2s ease;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
       }
 
       #name-input:focus {
-        border-color: rgba(34, 211, 238, 0.95);
+        border-color: rgba(56, 189, 248, 0.95);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
       }
 
       .name-actions {
@@ -89,12 +108,17 @@
         width: 100%;
         border: none;
         border-radius: 12px;
-        padding: 12px 14px;
-        background: linear-gradient(90deg, #22d3ee 0%, #3b82f6 100%);
-        color: #0f172a;
+        padding: 13px 14px;
+        background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 76%, var(--accent-warm) 100%);
+        color: #041725;
         font-size: 15px;
         font-weight: 700;
         cursor: pointer;
+        letter-spacing: 0.04em;
+      }
+
+      #start-button:hover {
+        filter: brightness(1.06);
       }
 
       #start-button:disabled {
@@ -104,23 +128,194 @@
 
       #name-error {
         min-height: 18px;
-        margin-top: 8px;
+        margin-top: 10px;
         font-size: 13px;
         color: #fda4af;
+      }
+
+      #hud-overlay {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        width: min(92vw, 336px);
+        pointer-events: none;
+        z-index: 25;
+      }
+
+      .hud-card {
+        background: linear-gradient(168deg, rgba(8, 22, 38, 0.86), rgba(11, 33, 56, 0.86));
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 15px;
+        padding: 10px 12px;
+        backdrop-filter: blur(4px);
+        box-shadow: 0 12px 30px rgba(2, 10, 22, 0.36);
+      }
+
+      #hud-status {
+        color: #dcfce7;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      #hud-player {
+        color: #bfdbfe;
+        font-size: 12px;
+        margin-top: 2px;
+        margin-bottom: 8px;
+      }
+
+      .hud-title {
+        color: #fef3c7;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        margin-bottom: 5px;
+      }
+
+      #hud-scoreboard {
+        margin: 0;
+        color: #f8fafc;
+        font-size: 12px;
+        line-height: 1.45;
+        font-family: Consolas, "Courier New", monospace;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 900px), (max-height: 720px) {
+        #hud-overlay {
+          top: 8px;
+          right: 8px;
+          width: min(96vw, 306px);
+        }
+
+        .hud-card {
+          border-radius: 13px;
+          padding: 9px 10px;
+        }
+
+        #hud-scoreboard {
+          font-size: 11px;
+        }
+
+        .name-card {
+          width: min(96vw, 420px);
+          border-radius: 14px;
+          padding: 16px;
+        }
+
+        .name-card h1 {
+          font-size: 22px;
+          margin-bottom: 8px;
+        }
+
+        .name-card p {
+          font-size: 13px;
+          margin-bottom: 12px;
+        }
+
+        #name-input {
+          font-size: 16px;
+          padding: 11px 12px;
+        }
+
+        #start-button {
+          padding: 11px 12px;
+          font-size: 14px;
+        }
+      }
+
+      @media (max-width: 520px), (max-height: 480px) {
+        #hud-overlay {
+          left: 6px;
+          right: 6px;
+          width: auto;
+        }
+
+        #hud-scoreboard {
+          line-height: 1.35;
+        }
+
+        #name-overlay {
+          padding: 6px;
+        }
+
+        .name-card {
+          width: 100%;
+          max-height: 96vh;
+          border-radius: 12px;
+          padding: 12px;
+        }
+
+        .name-card p {
+          margin-bottom: 10px;
+          line-height: 1.3;
+        }
+
+        .name-actions {
+          margin-top: 8px;
+        }
+
+        #name-input {
+          letter-spacing: 0.01em;
+        }
+      }
+
+      @media (min-width: 1500px) {
+        .name-card {
+          width: min(44vw, 620px);
+          max-height: min(88vh, 640px);
+          padding: 30px;
+        }
+
+        .name-card h1 {
+          font-size: 36px;
+          margin-bottom: 14px;
+        }
+
+        .name-card p {
+          font-size: 17px;
+          margin-bottom: 18px;
+        }
+
+        #name-input {
+          font-size: 20px;
+          padding: 16px 18px;
+        }
+
+        #start-button {
+          font-size: 18px;
+          padding: 16px 18px;
+        }
+      }
+
+      @media (min-width: 2400px) {
+        .name-card {
+          width: min(40vw, 720px);
+        }
       }
     </style>
   </head>
   <body>
+    <div id="hud-overlay">
+      <div class="hud-card">
+        <div id="hud-status">Warte auf Lobby-Start…</div>
+        <div id="hud-player">Warte auf Spawn…</div>
+        <div class="hud-title">Scoreboard</div>
+        <pre id="hud-scoreboard">• Noch keine Punkte</pre>
+      </div>
+    </div>
+
     <div id="name-overlay">
       <div class="name-card">
-        <h1>Magnet Arena</h1>
-        <p>Gib deinen Namen ein, dann geht’s in die Arena. Ohne Name kein Match-Start.</p>
+        <h1>Force Pit Arena</h1>
+        <p>Wachse durch Orbs, lade Kraft auf und stoße kleinere Spieler in den Abgrund.</p>
         <input
           id="name-input"
           type="text"
           maxlength="16"
           placeholder="Dein Spielername"
           autocomplete="nickname"
+          autofocus
         />
         <div class="name-actions">
           <button id="start-button" type="button">In die Arena starten</button>

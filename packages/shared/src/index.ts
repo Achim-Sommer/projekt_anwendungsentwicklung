@@ -1,10 +1,3 @@
-export type MagnetMode =
-  | "balanced"
-  | "strong-push"
-  | "long-pull"
-  | "aoe"
-  | "sticky";
-
 export type HazardType = "pit" | "lava" | "electric";
 
 export interface Vec2 {
@@ -27,6 +20,26 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
+export type PickupKind = "mass" | "speed" | "shield" | "stealth";
+
+export interface ForceOrb {
+  id: string;
+  kind: PickupKind;
+  x: number;
+  y: number;
+  value: number;
+  radius: number;
+}
+
+export type SkinId = "starter" | "mint" | "sunset" | "rose" | "gold";
+
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  score: number;
+  isBot: boolean;
+}
+
 export interface PlayerSnapshot {
   id: string;
   name: string;
@@ -36,22 +49,41 @@ export interface PlayerSnapshot {
   vy: number;
   radius: number;
   color: number;
-  energy: number;
-  mode: MagnetMode;
+  skinId: SkinId;
+  spawnProtectionMsLeft: number;
+  speedBoostMsLeft: number;
+  invulnerableMsLeft: number;
+  stealthMsLeft: number;
+  mass: number;
   score: number;
   isBot: boolean;
   alive: boolean;
 }
 
+export interface SnapshotDebugInfo {
+  serverTickMs: number;
+  snapshotRate: number;
+  leaderboardRate: number;
+  combatActive: boolean;
+  orbCount: number;
+  orbCap: number;
+}
+
 export interface GameSnapshot {
   tick: number;
   serverTime: number;
-  arena: ArenaState;
   players: PlayerSnapshot[];
+  pickups: ForceOrb[];
+  full?: boolean;
+  removedPlayerIds?: string[];
+  removedPickupIds?: string[];
+  leaderboard?: LeaderboardEntry[];
+  debug?: SnapshotDebugInfo;
 }
 
 export interface WelcomePayload {
   yourId: string;
+  arena: ArenaState;
   snapshot: GameSnapshot;
 }
 
@@ -65,18 +97,25 @@ export interface PlayerInputPayload {
   down: boolean;
   left: boolean;
   right: boolean;
-  push: boolean;
-  pull: boolean;
-  aimX: number;
-  aimY: number;
+}
+
+export interface DebugPingPayload {
+  clientSentAt: number;
+}
+
+export interface DebugPongPayload {
+  clientSentAt: number;
+  serverTime: number;
 }
 
 export interface ServerToClientEvents {
   welcome: (payload: WelcomePayload) => void;
   snapshot: (payload: GameSnapshot) => void;
   playerLeft: (payload: PlayerLeftPayload) => void;
+  debugPong: (payload: DebugPongPayload) => void;
 }
 
 export interface ClientToServerEvents {
   input: (payload: PlayerInputPayload) => void;
+  debugPing: (payload: DebugPingPayload) => void;
 }
