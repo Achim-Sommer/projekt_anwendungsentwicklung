@@ -98,9 +98,9 @@ interface QualityProfile {
 
 const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
   low: {
-    inputIntervalMs: 20,
+    inputIntervalMs: 16,
     hudIntervalMs: 120,
-    pickupRedrawIntervalMs: 120,
+    pickupRedrawIntervalMs: 80,
     pickupMargin: 18,
     pickupDetail: "low",
     maxNameLabels: 3,
@@ -108,19 +108,19 @@ const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
     debugIntervalMs: 250,
   },
   normal: {
-    inputIntervalMs: 20,
-    hudIntervalMs: 95,
-    pickupRedrawIntervalMs: 80,
+    inputIntervalMs: 12,
+    hudIntervalMs: 90,
+    pickupRedrawIntervalMs: 45,
     pickupMargin: 28,
     pickupDetail: "normal",
-    maxNameLabels: 8,
-    nameLabelDistance: 420,
+    maxNameLabels: 12,
+    nameLabelDistance: 520,
     debugIntervalMs: 220,
   },
   high: {
-    inputIntervalMs: 20,
+    inputIntervalMs: 8,
     hudIntervalMs: 95,
-    pickupRedrawIntervalMs: 50,
+    pickupRedrawIntervalMs: 25,
     pickupMargin: 56,
     pickupDetail: "high",
     maxNameLabels: 22,
@@ -138,12 +138,12 @@ const SEMI_STATIC_DEADZONE_Y_RATIO = 0.36;
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
   if (stored === "low") {
-    return "low";
-  }
-  if (stored === "high") {
     return "normal";
   }
-  return "normal";
+  if (stored === "normal" || stored === "high") {
+    return "high";
+  }
+  return "high";
 }
 
 let playerName = "";
@@ -1216,8 +1216,8 @@ const config: Phaser.Types.Core.GameConfig = {
   antialias: false,
   powerPreference: "high-performance",
   fps: {
-    target: 60,
-    min: 30,
+    target: 120,
+    min: 60,
   },
   scene: [GameScene],
   parent: document.body,

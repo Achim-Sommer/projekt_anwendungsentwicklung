@@ -28,12 +28,11 @@ const FIXED_STEP_MS = 1000 / TICK_RATE;
 const SIM_LOOP_INTERVAL_MS = FIXED_STEP_MS;
 const MAX_SIM_STEPS_PER_FRAME = 4;
 const STREAM_PLAYER_RADIUS = 980;
-const STREAM_PICKUP_RADIUS = 860;
 const STREAM_FULL_RESYNC_MS = 8000;
 
 const PLAYER_START_MASS = 10;
-const PLAYER_ACCELERATION_BASE = 1700;
-const PLAYER_MAX_SPEED_BASE = 370;
+const PLAYER_ACCELERATION_BASE = 2050;
+const PLAYER_MAX_SPEED_BASE = 450;
 const PLAYER_DRAG = 0.92;
 const SPEED_BOOST_MULTIPLIER = 1.22;
 const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.1;
@@ -45,10 +44,11 @@ const SPAWN_ATTEMPTS = 40;
 const TARGET_TOTAL_PLAYERS = 4;
 
 const ORB_SPAWN_INTERVAL_MS = 420;
-const ORB_BASE_COUNT = 30;
-const ORB_PER_ACTIVE_PLAYER = 12;
-const ORB_MIN_COUNT = 36;
-const ORB_MAX_COUNT = 80;
+const ORB_SPAWN_INTERVAL_MS_FAST = 180;
+const ORB_BASE_COUNT = 100;
+const ORB_PER_ACTIVE_PLAYER = 40;
+const ORB_MIN_COUNT = 140;
+const ORB_MAX_COUNT = 260;
 const ORB_RADIUS = 6;
 const ORB_VALUE_MIN = 8;
 const ORB_VALUE_MAX = 14;
@@ -257,12 +257,12 @@ function massToRadius(mass: number): number {
 
 function maxSpeedForMass(mass: number): number {
   const speed = PLAYER_MAX_SPEED_BASE * Math.pow(Math.max(1, mass), -0.25);
-  return clamp(speed, 120, PLAYER_MAX_SPEED_BASE);
+  return clamp(speed, 145, PLAYER_MAX_SPEED_BASE);
 }
 
 function accelerationForMass(mass: number): number {
   const acceleration = PLAYER_ACCELERATION_BASE * Math.pow(Math.max(1, mass), -0.2);
-  return clamp(acceleration, 340, PLAYER_ACCELERATION_BASE);
+  return clamp(acceleration, 430, PLAYER_ACCELERATION_BASE);
 }
 
 function randomSpawn() {
@@ -514,18 +514,8 @@ function filterLeaderboardForClient(
 }
 
 function visiblePickupsForClient(localPlayer: ServerPlayer): ForceOrb[] {
-  const radiusSq = STREAM_PICKUP_RADIUS * STREAM_PICKUP_RADIUS;
-  const result: ForceOrb[] = [];
-
-  for (const pickup of pickups.values()) {
-    const dx = pickup.x - localPlayer.x;
-    const dy = pickup.y - localPlayer.y;
-    if (dx * dx + dy * dy <= radiusSq) {
-      result.push(pickup);
-    }
-  }
-
-  return result;
+  void localPlayer;
+  return Array.from(pickups.values());
 }
 
 function buildClientSnapshot(
@@ -932,7 +922,7 @@ function handleRespawns(now: number): void {
 }
 
 function spawnOrb(now: number): void {
-  if (pickups.size >= adaptiveOrbCap() || now - lastOrbSpawnAt < ORB_SPAWN_INTERVAL_MS) {
+  if (pickups.size >= adaptiveOrbCap() || now - lastOrbSpawnAt < ORB_SPAWN_INTERVAL_MS_FAST) {
     return;
   }
 
