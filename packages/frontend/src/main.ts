@@ -83,6 +83,36 @@ if (!(existingDebugOverlay instanceof HTMLPreElement)) {
   document.body.appendChild(debugOverlayElement);
 }
 
+const existingAnnouncementOverlay = document.getElementById("hud-announcement");
+const announcementOverlayElement =
+  existingAnnouncementOverlay instanceof HTMLDivElement
+    ? existingAnnouncementOverlay
+    : document.createElement("div");
+if (!(existingAnnouncementOverlay instanceof HTMLDivElement)) {
+  announcementOverlayElement.id = "hud-announcement";
+  announcementOverlayElement.style.position = "fixed";
+  announcementOverlayElement.style.left = "50%";
+  announcementOverlayElement.style.top = "12px";
+  announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+  announcementOverlayElement.style.maxWidth = "min(92vw, 560px)";
+  announcementOverlayElement.style.padding = "10px 14px";
+  announcementOverlayElement.style.borderRadius = "12px";
+  announcementOverlayElement.style.border = "1px solid rgba(56, 189, 248, 0.62)";
+  announcementOverlayElement.style.background = "rgba(8, 24, 40, 0.9)";
+  announcementOverlayElement.style.color = "#f8fafc";
+  announcementOverlayElement.style.font = "700 13px/1.4 'Trebuchet MS', 'Segoe UI', sans-serif";
+  announcementOverlayElement.style.letterSpacing = "0.01em";
+  announcementOverlayElement.style.textAlign = "center";
+  announcementOverlayElement.style.whiteSpace = "pre-line";
+  announcementOverlayElement.style.pointerEvents = "none";
+  announcementOverlayElement.style.zIndex = "26";
+  announcementOverlayElement.style.boxShadow = "0 10px 24px rgba(2, 10, 22, 0.42)";
+  announcementOverlayElement.style.transition = "opacity 180ms ease, transform 180ms ease";
+  announcementOverlayElement.style.display = "none";
+  announcementOverlayElement.style.opacity = "0";
+  document.body.appendChild(announcementOverlayElement);
+}
+
 type QualityMode = "low" | "normal" | "high";
 
 interface QualityProfile {
@@ -243,6 +273,14 @@ class GameScene extends Phaser.Scene {
   private latestRttMs: number | null = null;
   private lastPingSentAt = 0;
   private latestServerDebug: SnapshotDebugInfo | null = null;
+  private announcementQueue: Array<{
+    title: string;
+    detail: string;
+    tone: "event" | "bounty";
+  }> = [];
+  private announcementActive = false;
+  private announcementHoldTimerId: number | null = null;
+  private announcementFadeTimerId: number | null = null;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -274,6 +312,7 @@ class GameScene extends Phaser.Scene {
     this.onDisconnect = () => {
       this.updateStatus();
       this.hudDirty = true;
+      this.clearAnnouncementQueue();
     };
     this.onConnectError = () => {
       this.updateStatus();
@@ -282,6 +321,7 @@ class GameScene extends Phaser.Scene {
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
       this.arena = payload.arena;
+      this.clearAnnouncementQueue();
       this.applyIncomingSnapshot(payload.snapshot);
       this.syncRenderPlayersFromSnapshot(true);
       this.lastSentInput = null;
@@ -298,11 +338,13 @@ class GameScene extends Phaser.Scene {
       this.maybeUpdateDebugOverlay(true);
     };
     this.onSnapshot = (payload) => {
+      const previousSnapshot = this.snapshot;
       this.latestServerDebug = payload.debug ?? this.latestServerDebug;
       if (this.debugEnabled) {
         this.latestSnapshotBytes = this.estimateSnapshotBytes(payload);
       }
       this.applyIncomingSnapshot(payload);
+      this.detectSnapshotAnnouncements(previousSnapshot);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
       const pickupChanged =
@@ -598,6 +640,96 @@ class GameScene extends Phaser.Scene {
     ].join("\n");
 
     this.lastDebugUpdateAt = now;
+  }
+
+  private enqueueAnnouncement(title: string, detail: string, tone: "event" | "bounty"): void {
+    this.announcementQueue.push({ title, detail, tone });
+    this.processAnnouncementQueue();
+  }
+
+  private processAnnouncementQueue(): void {
+    if (this.announcementActive) {
+      return;
+    }
+
+    const next = this.announcementQueue.shift();
+    if (!next) {
+      return;
+    }
+
+    this.announcementActive = true;
+    const isEvent = next.tone === "event";
+    announcementOverlayElement.style.borderColor = isEvent
+      ? "rgba(56, 189, 248, 0.72)"
+      : "rgba(245, 158, 11, 0.8)";
+    announcementOverlayElement.style.background = isEvent
+      ? "rgba(8, 24, 40, 0.9)"
+      : "rgba(44, 25, 6, 0.9)";
+    announcementOverlayElement.style.color = isEvent ? "#dbeafe" : "#fef3c7";
+    announcementOverlayElement.textContent = next.detail.length > 0
+      ? `${next.title}\n${next.detail}`
+      : next.title;
+    announcementOverlayElement.style.display = "block";
+
+    requestAnimationFrame(() => {
+      announcementOverlayElement.style.opacity = "1";
+      announcementOverlayElement.style.transform = "translate(-50%, 0)";
+    });
+
+    this.announcementHoldTimerId = window.setTimeout(() => {
+      this.announcementHoldTimerId = null;
+      announcementOverlayElement.style.opacity = "0";
+      announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+      this.announcementFadeTimerId = window.setTimeout(() => {
+        this.announcementFadeTimerId = null;
+        announcementOverlayElement.style.display = "none";
+        this.announcementActive = false;
+        this.processAnnouncementQueue();
+      }, 220);
+    }, 2400);
+  }
+
+  private clearAnnouncementQueue(): void {
+    this.announcementQueue = [];
+    this.announcementActive = false;
+    if (this.announcementHoldTimerId != null) {
+      window.clearTimeout(this.announcementHoldTimerId);
+      this.announcementHoldTimerId = null;
+    }
+    if (this.announcementFadeTimerId != null) {
+      window.clearTimeout(this.announcementFadeTimerId);
+      this.announcementFadeTimerId = null;
+    }
+    announcementOverlayElement.style.display = "none";
+    announcementOverlayElement.style.opacity = "0";
+    announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+  }
+
+  private detectSnapshotAnnouncements(previousSnapshot: GameSnapshot | null): void {
+    const nextSnapshot = this.snapshot;
+    if (!previousSnapshot || !nextSnapshot) {
+      return;
+    }
+
+    const previousEventKind = previousSnapshot.activeEvent?.kind ?? "none";
+    const nextEvent = nextSnapshot.activeEvent;
+    const nextEventKind = nextEvent?.kind ?? "none";
+    if (previousEventKind !== nextEventKind && nextEvent && nextEvent.kind !== "none") {
+      this.enqueueAnnouncement(`Event gestartet: ${nextEvent.title}`, nextEvent.description, "event");
+    }
+
+    const previousBountyTargetId = previousSnapshot.bountyTargetId ?? null;
+    const nextBountyTargetId = nextSnapshot.bountyTargetId ?? null;
+    if (previousBountyTargetId !== nextBountyTargetId) {
+      if (nextBountyTargetId) {
+        const targetName =
+          nextSnapshot.players.find((player) => player.id === nextBountyTargetId)?.name ?? "Unbekannt";
+        const bonus = Math.max(0, Math.round(nextSnapshot.bountyBonus ?? 0));
+        this.enqueueAnnouncement("Neues Kopfgeld", `${targetName} | Bonus +${bonus} P`, "bounty");
+      } else if (previousBountyTargetId) {
+        this.enqueueAnnouncement("Kopfgeld pausiert", "Zu wenig aktive Spieler.", "bounty");
+      }
+    }
   }
 
   private clampCameraCenterToArena(centerX: number, centerY: number): { x: number; y: number } {
@@ -1235,6 +1367,7 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
+    this.clearAnnouncementQueue();
     this.debugEnabled = false;
     debugOverlayElement.style.display = "none";
     debugOverlayElement.textContent = "";

@@ -68,7 +68,10 @@ const HAZARD_DEATH_OVERLAP_MIN = 10;
 const HAZARD_DEATH_OVERLAP_MAX = 24;
 const BOUNTY_ROTATE_INTERVAL_MS = 26_000;
 const BOUNTY_MIN_PLAYERS = 2;
-const BOUNTY_BONUS_POINTS = 38;
+const BOUNTY_BONUS_POINTS_BASE = 30;
+const BOUNTY_BONUS_POINTS_MIN = 20;
+const BOUNTY_BONUS_POINTS_MAX = 120;
+const BOUNTY_BONUS_REFRESH_MS = 1400;
 const BOUNTY_BONUS_MASS = 14;
 const MATCH_EVENT_INTERVAL_MS = 62_000;
 const MATCH_EVENT_DURATION_MS = 20_000;
@@ -258,7 +261,9 @@ let combatBoostUntil = 0;
 let loopAccumulatorMs = 0;
 let lastLoopAt = Date.now();
 let bountyTargetId: string | null = null;
-let bountyBonusPoints = BOUNTY_BONUS_POINTS;
+let bountyBonusPoints = BOUNTY_BONUS_POINTS_BASE;
+let bountyVolatility = 0;
+let lastBountyBonusRefreshAt = Date.now();
 let bountyNextRotateAt = Date.now() + 8_000;
 let currentEvent: ActiveMatchEventState = {
   kind: "none",
@@ -483,7 +488,40 @@ function currentEventSpeedMultiplier(): number {
 }
 
 function currentBountyRewardPoints(): number {
-  return Math.max(BOUNTY_BONUS_POINTS, bountyBonusPoints);
+  return clamp(Math.round(bountyBonusPoints), BOUNTY_BONUS_POINTS_MIN, BOUNTY_BONUS_POINTS_MAX);
+}
+
+function activeAlivePlayerCount(): number {
+  let count = 0;
+  for (const player of players.values()) {
+    if (player.alive) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function computeDynamicBountyRewardPoints(target: ServerPlayer | null): number {
+  const alivePlayers = activeAlivePlayerCount();
+  const playerFactor = Math.max(0, alivePlayers - BOUNTY_MIN_PLAYERS) * 3;
+
+  const targetMass = Math.max(8, target?.mass ?? PLAYER_START_MASS);
+  const massFactor = Math.round(Math.sqrt(targetMass) * 3.1);
+
+  const targetScore = Math.max(0, target?.score ?? 0);
+  const scoreFactor = Math.round(Math.log10(targetScore + 10) * 8.2);
+
+  let reward = BOUNTY_BONUS_POINTS_BASE + playerFactor + massFactor + scoreFactor + bountyVolatility;
+  if (currentEvent.kind === "bounty_rush") {
+    reward *= EVENT_BOUNTY_RUSH_MULTIPLIER;
+  }
+
+  return clamp(Math.round(reward), BOUNTY_BONUS_POINTS_MIN, BOUNTY_BONUS_POINTS_MAX);
+}
+
+function refreshBountyRewardPoints(target: ServerPlayer | null, now: number): void {
+  bountyBonusPoints = computeDynamicBountyRewardPoints(target);
+  lastBountyBonusRefreshAt = now;
 }
 
 function bountyRotateIntervalMs(): number {
@@ -537,10 +575,9 @@ function startMatchEvent(kind: MatchEventKind, now: number): void {
     };
   }
 
-  if (currentEvent.kind === "bounty_rush") {
-    bountyBonusPoints = Math.round(BOUNTY_BONUS_POINTS * EVENT_BOUNTY_RUSH_MULTIPLIER);
-  } else {
-    bountyBonusPoints = BOUNTY_BONUS_POINTS;
+  const currentTarget = bountyTargetId ? players.get(bountyTargetId) ?? null : null;
+  if (currentTarget && currentTarget.alive) {
+    refreshBountyRewardPoints(currentTarget, now);
   }
 }
 
@@ -551,7 +588,12 @@ function clearMatchEvent(now: number): void {
     description: "",
     endsAt: 0,
   };
-  bountyBonusPoints = BOUNTY_BONUS_POINTS;
+  const currentTarget = bountyTargetId ? players.get(bountyTargetId) ?? null : null;
+  if (currentTarget && currentTarget.alive) {
+    refreshBountyRewardPoints(currentTarget, now);
+  } else {
+    bountyBonusPoints = BOUNTY_BONUS_POINTS_BASE;
+  }
   nextEventAt = now + MATCH_EVENT_INTERVAL_MS;
 }
 
@@ -566,21 +608,17 @@ function updateMatchEventState(now: number): void {
 }
 
 function chooseRandomBountyTarget(excludeId?: string): ServerPlayer | null {
-  const alivePlayers = Array.from(players.values()).filter((player) => {
-    if (!player.alive) {
-      return false;
-    }
-    if (excludeId && player.id === excludeId) {
-      return false;
-    }
-    return true;
-  });
-
+  const alivePlayers = Array.from(players.values()).filter((player) => player.alive);
   if (alivePlayers.length < BOUNTY_MIN_PLAYERS) {
     return null;
   }
 
-  return alivePlayers[Math.floor(Math.random() * alivePlayers.length)] ?? null;
+  const eligiblePlayers = alivePlayers.filter((player) => !excludeId || player.id !== excludeId);
+  if (eligiblePlayers.length === 0) {
+    return null;
+  }
+
+  return eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)] ?? null;
 }
 
 function rotateRandomBounty(now: number, force = false): void {
@@ -594,11 +632,16 @@ function rotateRandomBounty(now: number, force = false): void {
   const nextTarget = chooseRandomBountyTarget(force ? bountyTargetId ?? undefined : undefined);
   if (!nextTarget) {
     bountyTargetId = null;
+    bountyVolatility = 0;
+    bountyBonusPoints = BOUNTY_BONUS_POINTS_BASE;
+    lastBountyBonusRefreshAt = now;
     bountyNextRotateAt = now + bountyRotateIntervalMs();
     return;
   }
 
   bountyTargetId = nextTarget.id;
+  bountyVolatility = Math.floor(Math.random() * 11) - 5;
+  refreshBountyRewardPoints(nextTarget, now);
   bountyNextRotateAt = now + bountyRotateIntervalMs();
 }
 
@@ -609,6 +652,10 @@ function updateBountyState(now: number): void {
   if (!targetValid) {
     rotateRandomBounty(now, true);
     return;
+  }
+
+  if (now - lastBountyBonusRefreshAt >= BOUNTY_BONUS_REFRESH_MS) {
+    refreshBountyRewardPoints(currentTarget ?? null, now);
   }
 
   rotateRandomBounty(now, false);
