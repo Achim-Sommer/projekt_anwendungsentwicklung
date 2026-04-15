@@ -19,14 +19,14 @@ import type {
 
 const PORT = process.env.PORT ?? 3000;
 const TICK_RATE = 60;
-const SNAPSHOT_RATE_IDLE = 20;
-const SNAPSHOT_RATE_COMBAT = 30;
+const SNAPSHOT_RATE_IDLE = 30;
+const SNAPSHOT_RATE_COMBAT = 40;
 const LEADERBOARD_RATE_IDLE = 2;
 const LEADERBOARD_RATE_COMBAT = 4;
 const DT = 1 / TICK_RATE;
 const FIXED_STEP_MS = 1000 / TICK_RATE;
-const SIM_LOOP_INTERVAL_MS = 5;
-const MAX_SIM_STEPS_PER_FRAME = 5;
+const SIM_LOOP_INTERVAL_MS = FIXED_STEP_MS;
+const MAX_SIM_STEPS_PER_FRAME = 4;
 const STREAM_PLAYER_RADIUS = 980;
 const STREAM_PICKUP_RADIUS = 1120;
 const STREAM_FULL_RESYNC_MS = 8000;
@@ -450,10 +450,10 @@ function playerSignature(player: PlayerSnapshot): string {
   const invulnerabilityBucket = Math.ceil(player.invulnerableMsLeft / 180);
   const stealthBucket = Math.ceil(player.stealthMsLeft / 180);
   return [
-    Math.round(player.x),
-    Math.round(player.y),
-    Math.round(player.vx),
-    Math.round(player.vy),
+    Math.round(player.x * 10),
+    Math.round(player.y * 10),
+    Math.round(player.vx * 10),
+    Math.round(player.vy * 10),
     Math.round(player.radius * 10),
     player.score,
     player.alive ? 1 : 0,

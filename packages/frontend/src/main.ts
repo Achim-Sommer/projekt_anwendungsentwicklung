@@ -89,7 +89,6 @@ interface QualityProfile {
   inputIntervalMs: number;
   hudIntervalMs: number;
   pickupRedrawIntervalMs: number;
-  pickupCameraMoveThreshold: number;
   pickupMargin: number;
   pickupDetail: "low" | "normal" | "high";
   maxNameLabels: number;
@@ -100,9 +99,8 @@ interface QualityProfile {
 const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
   low: {
     inputIntervalMs: 34,
-    hudIntervalMs: 125,
-    pickupRedrawIntervalMs: 220,
-    pickupCameraMoveThreshold: 36,
+    hudIntervalMs: 120,
+    pickupRedrawIntervalMs: 100,
     pickupMargin: 28,
     pickupDetail: "low",
     maxNameLabels: 8,
@@ -111,9 +109,8 @@ const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
   },
   normal: {
     inputIntervalMs: 33,
-    hudIntervalMs: 110,
-    pickupRedrawIntervalMs: 150,
-    pickupCameraMoveThreshold: 26,
+    hudIntervalMs: 100,
+    pickupRedrawIntervalMs: 66,
     pickupMargin: 42,
     pickupDetail: "normal",
     maxNameLabels: 14,
@@ -123,8 +120,7 @@ const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
   high: {
     inputIntervalMs: 33,
     hudIntervalMs: 95,
-    pickupRedrawIntervalMs: 95,
-    pickupCameraMoveThreshold: 20,
+    pickupRedrawIntervalMs: 40,
     pickupMargin: 56,
     pickupDetail: "high",
     maxNameLabels: 22,
@@ -137,10 +133,13 @@ const QUALITY_STORAGE_KEY = "arena-quality-mode";
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
-  if (stored === "low" || stored === "high" || stored === "normal") {
+  if (stored === "high" || stored === "normal") {
     return stored;
   }
-  return "normal";
+  if (stored === "low") {
+    return "normal";
+  }
+  return "high";
 }
 
 let playerName = "";
@@ -232,7 +231,6 @@ class GameScene extends Phaser.Scene {
   private lastHudUpdateAt = 0;
   private pickupsDirty = true;
   private lastPickupDrawAt = 0;
-  private lastPickupCameraState = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN };
   private qualityMode: QualityMode = loadQualityMode();
   private qualityProfile: QualityProfile = QUALITY_PROFILES[this.qualityMode];
   private debugEnabled = false;
@@ -537,25 +535,15 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    const camera = this.cameras.main;
-    const cameraMoved =
-      !Number.isFinite(this.lastPickupCameraState.x) ||
-      Math.abs(camera.scrollX - this.lastPickupCameraState.x) >= this.qualityProfile.pickupCameraMoveThreshold ||
-      Math.abs(camera.scrollY - this.lastPickupCameraState.y) >= this.qualityProfile.pickupCameraMoveThreshold ||
-      Math.abs(camera.zoom - this.lastPickupCameraState.zoom) >= 0.02;
-
     const now = this.time.now;
     const due = now - this.lastPickupDrawAt >= this.qualityProfile.pickupRedrawIntervalMs;
-    if (!force && (!due || (!this.pickupsDirty && !cameraMoved))) {
+    if (!force && !this.pickupsDirty && !due) {
       return;
     }
 
     this.drawPickups();
     this.lastPickupDrawAt = now;
     this.pickupsDirty = false;
-    this.lastPickupCameraState.x = camera.scrollX;
-    this.lastPickupCameraState.y = camera.scrollY;
-    this.lastPickupCameraState.zoom = camera.zoom;
   }
 
   private maybeUpdateDebugOverlay(force = false): void {
@@ -695,11 +683,11 @@ class GameScene extends Phaser.Scene {
       state.x += state.vx * dt;
       state.y += state.vy * dt;
 
-      const blend = clamp(0.24 + dt * 6.2, 0.24, 0.5);
+      const blend = clamp(0.16 + dt * 4.5, 0.16, 0.34);
       state.x = Phaser.Math.Linear(state.x, player.x, blend);
       state.y = Phaser.Math.Linear(state.y, player.y, blend);
-      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.42);
-      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.42);
+      state.vx = Phaser.Math.Linear(state.vx, player.vx, 0.28);
+      state.vy = Phaser.Math.Linear(state.vy, player.vy, 0.28);
 
       const errorX = player.x - state.x;
       const errorY = player.y - state.y;
