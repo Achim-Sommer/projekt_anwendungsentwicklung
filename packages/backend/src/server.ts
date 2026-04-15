@@ -79,10 +79,12 @@ const EVENT_HASTE_SPEED_MULTIPLIER = 1.16;
 const EVENT_DOUBLE_ORB_MULTIPLIER = 2;
 const EVENT_BOUNTY_RUSH_MULTIPLIER = 1.55;
 
-const AI_TARGET_RETHINK_BASE_MS = 320;
-const AI_TARGET_RETHINK_RANDOM_MS = 420;
 const AI_SEPARATION_RADIUS = 170;
 const AI_SEPARATION_RADIUS_SQ = AI_SEPARATION_RADIUS * AI_SEPARATION_RADIUS;
+const AI_DANGER_SCAN_RADIUS = 760;
+const AI_DANGER_MASS_RATIO = 1.1;
+const AI_RETREAT_DURATION_MS = 900;
+const AI_LOOKAHEAD_MAX_SECONDS = 0.34;
 const DEFAULT_PLAYER_COLOR = 0x38bdf8;
 const BOT_PLAYER_COLOR = 0x64748b;
 
@@ -129,6 +131,10 @@ interface ServerPlayer {
   aiTargetKind?: "player" | "orb";
   aiDecisionAt: number;
   aiTickPhase: number;
+  aiAggression: number;
+  aiGreed: number;
+  aiCaution: number;
+  aiRetreatUntil: number;
 }
 
 interface StreamState {
@@ -874,6 +880,9 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
   const now = Date.now();
   const spawn = findSafeSpawn(id);
   const baseColor = isBot ? BOT_PLAYER_COLOR : DEFAULT_PLAYER_COLOR;
+  const aiAggression = isBot ? 0.72 + Math.random() * 0.7 : 1;
+  const aiGreed = isBot ? 0.75 + Math.random() * 0.6 : 1;
+  const aiCaution = isBot ? 0.78 + Math.random() * 0.7 : 1;
   return {
     id,
     name,
@@ -904,6 +913,10 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     },
     aiDecisionAt: 0,
     aiTickPhase: Math.floor(Math.random() * 3),
+    aiAggression,
+    aiGreed,
+    aiCaution,
+    aiRetreatUntil: 0,
   };
 }
 
@@ -1258,6 +1271,7 @@ function runAi(now: number): void {
   const list = Array.from(players.values());
   const orbs = Array.from(pickups.values());
   const arenaCenter = { x: arena.width / 2, y: arena.height / 2 };
+  const bountyTarget = bountyTargetId ? players.get(bountyTargetId) : undefined;
 
   for (const bot of list) {
     if (!bot.isBot || !bot.alive) {
@@ -1277,71 +1291,157 @@ function runAi(now: number): void {
     }
     if (bot.aiTargetKind === "player" && bot.aiTargetId) {
       const cached = players.get(bot.aiTargetId);
-      if (!cached || !cached.alive) {
+      if (!cached || !cached.alive || !canConsumeTarget(bot, cached, now)) {
         bot.aiTargetId = undefined;
         bot.aiTargetKind = undefined;
         bot.aiDecisionAt = 0;
       }
     }
 
+    let nearestThreat: ServerPlayer | undefined;
+    let nearestThreatDist = Number.POSITIVE_INFINITY;
+    let bestPrey: ServerPlayer | undefined;
+    let bestPreyScore = Number.NEGATIVE_INFINITY;
+    let bestOrb: ForceOrb | undefined;
+    let bestOrbScore = Number.NEGATIVE_INFINITY;
+
     if (now >= bot.aiDecisionAt) {
-      let targetPlayer: ServerPlayer | undefined;
-      let targetPlayerDistSq = Number.POSITIVE_INFINITY;
       for (const candidate of list) {
-        if (candidate.id === bot.id || !candidate.alive || !canConsumeTarget(bot, candidate, now)) {
+        if (candidate.id === bot.id || !candidate.alive) {
           continue;
         }
+
         const dx = candidate.x - bot.x;
         const dy = candidate.y - bot.y;
-        const distSq = dx * dx + dy * dy;
-        if (distSq < targetPlayerDistSq) {
-          targetPlayerDistSq = distSq;
-          targetPlayer = candidate;
+        const distance = Math.hypot(dx, dy);
+
+        if (
+          distance <= AI_DANGER_SCAN_RADIUS &&
+          candidate.mass >= bot.mass * AI_DANGER_MASS_RATIO &&
+          canConsumeTarget(candidate, bot, now)
+        ) {
+          if (distance < nearestThreatDist) {
+            nearestThreat = candidate;
+            nearestThreatDist = distance;
+          }
+        }
+
+        if (!canConsumeTarget(bot, candidate, now)) {
+          continue;
+        }
+
+        const massAdvantage = bot.mass / Math.max(1, candidate.mass);
+        const bountyBoost = candidate.id === bountyTarget?.id ? 52 : 0;
+        const humanBoost = candidate.isBot ? 0 : 10;
+        const distancePenalty = distance * (0.055 + 0.012 * bot.aiCaution);
+        const preyScore =
+          massAdvantage * 60 * bot.aiAggression +
+          bountyBoost +
+          humanBoost -
+          distancePenalty;
+
+        if (preyScore > bestPreyScore) {
+          bestPreyScore = preyScore;
+          bestPrey = candidate;
         }
       }
 
-      let targetOrb: ForceOrb | undefined;
-      let targetOrbDistSq = Number.POSITIVE_INFINITY;
+      const dangerRadius = (170 + bot.radius * 2.5) * bot.aiCaution;
+      const threatIsClose = Boolean(nearestThreat && nearestThreatDist <= dangerRadius);
+      if (threatIsClose) {
+        bot.aiRetreatUntil = now + AI_RETREAT_DURATION_MS + Math.random() * 260;
+      }
+
+      const retreating = bot.aiRetreatUntil > now;
+
       for (const orb of orbs) {
         const dx = orb.x - bot.x;
         const dy = orb.y - bot.y;
         const distSq = dx * dx + dy * dy;
-        if (distSq < targetOrbDistSq) {
-          targetOrbDistSq = distSq;
-          targetOrb = orb;
+        if (distSq > AI_DANGER_SCAN_RADIUS * AI_DANGER_SCAN_RADIUS) {
+          continue;
+        }
+
+        const distance = Math.sqrt(distSq);
+        let utility = 0;
+        if (orb.kind === "mass") {
+          utility = (12 + orb.value * 1.9) * bot.aiGreed;
+          if (bot.mass < 24) {
+            utility *= 1.16;
+          }
+        } else if (orb.kind === "speed") {
+          utility = retreating ? 88 : 34;
+        } else if (orb.kind === "shield") {
+          utility = retreating ? 96 : 38;
+        } else {
+          utility = retreating ? 74 : 30;
+        }
+
+        const hazardDistance = distanceToNearestHazard(orb.x, orb.y);
+        const hazardPenalty = hazardDistance < 42 ? 0.62 : hazardDistance < 80 ? 0.82 : 1;
+        const chasePenalty =
+          retreating && nearestThreat
+            ? clamp(Math.hypot(orb.x - nearestThreat.x, orb.y - nearestThreat.y) / 220, 0.5, 1.25)
+            : 1;
+        const orbScore = (utility * hazardPenalty * chasePenalty) / (0.4 + distance / 170);
+
+        if (orbScore > bestOrbScore) {
+          bestOrbScore = orbScore;
+          bestOrb = orb;
         }
       }
 
-      const shouldFarm = !targetPlayer && Boolean(targetOrb);
+      const shouldRetreat = retreating && Boolean(nearestThreat);
+      const canPressurePrey = Boolean(bestPrey && bestPreyScore >= (22 - 8 * bot.aiAggression));
 
-      if (shouldFarm && targetOrb) {
-        bot.aiTargetKind = "orb";
-        bot.aiTargetId = targetOrb.id;
-      } else if (targetPlayer) {
+      if (shouldRetreat) {
+        if (bestOrb && (bestOrb.kind !== "mass" || bestOrbScore > 26)) {
+          bot.aiTargetKind = "orb";
+          bot.aiTargetId = bestOrb.id;
+        } else {
+          bot.aiTargetId = undefined;
+          bot.aiTargetKind = undefined;
+        }
+        bot.aiDecisionAt = now + 120 + Math.random() * 120;
+      } else if (canPressurePrey && bestPrey) {
         bot.aiTargetKind = "player";
-        bot.aiTargetId = targetPlayer.id;
-      } else if (targetOrb) {
+        bot.aiTargetId = bestPrey.id;
+        bot.aiDecisionAt = now + 220 + Math.random() * 200;
+      } else if (bestOrb) {
         bot.aiTargetKind = "orb";
-        bot.aiTargetId = targetOrb.id;
+        bot.aiTargetId = bestOrb.id;
+        bot.aiDecisionAt = now + 260 + Math.random() * 260;
       } else {
         bot.aiTargetId = undefined;
         bot.aiTargetKind = undefined;
+        bot.aiDecisionAt = now + 300 + Math.random() * 300;
       }
-
-      bot.aiDecisionAt = now + AI_TARGET_RETHINK_BASE_MS + Math.random() * AI_TARGET_RETHINK_RANDOM_MS;
     }
 
+    const currentlyRetreating = bot.aiRetreatUntil > now;
     let targetX = arenaCenter.x;
     let targetY = arenaCenter.y;
 
-    if (bot.aiTargetKind === "player" && bot.aiTargetId) {
+    if (currentlyRetreating && nearestThreat) {
+      const away = normalize(bot.x - nearestThreat.x, bot.y - nearestThreat.y);
+      const lateral = normalize(-away.y, away.x);
+      const lateralSign = bot.aiAggression >= 1 ? 1 : -1;
+      targetX = bot.x + away.x * 360 + lateral.x * lateralSign * 90;
+      targetY = bot.y + away.y * 360 + lateral.y * lateralSign * 90;
+    } else if (bot.aiTargetKind === "player" && bot.aiTargetId) {
       const target = players.get(bot.aiTargetId);
       if (target && target.alive) {
+        const distance = Math.hypot(target.x - bot.x, target.y - bot.y);
+        const leadTime = clamp(distance / 620, 0.08, AI_LOOKAHEAD_MAX_SECONDS);
+        const predictedX = target.x + target.vx * leadTime;
+        const predictedY = target.y + target.vy * leadTime;
+
         const hazard = nearestHazardCenter(target);
         const hazardDir = normalize(hazard.x - target.x, hazard.y - target.y);
+        const trapOffset = 86 + 48 * bot.aiAggression;
         const trapPoint = {
-          x: target.x - hazardDir.x * 105,
-          y: target.y - hazardDir.y * 105,
+          x: predictedX - hazardDir.x * trapOffset,
+          y: predictedY - hazardDir.y * trapOffset,
         };
 
         targetX = trapPoint.x;
@@ -1355,12 +1455,17 @@ function runAi(now: number): void {
       }
     }
 
+    targetX = clamp(targetX, 26, arena.width - 26);
+    targetY = clamp(targetY, 26, arena.height - 26);
+
     const toTarget = normalize(targetX - bot.x, targetY - bot.y);
     const edgeAvoid = edgeRepulsion(bot);
     const hazardAvoid = hazardRepulsion(bot);
 
     let separationX = 0;
     let separationY = 0;
+    let predatorAvoidX = 0;
+    let predatorAvoidY = 0;
     for (const other of list) {
       if (other.id === bot.id || !other.alive) {
         continue;
@@ -1376,18 +1481,43 @@ function runAi(now: number): void {
       const dir = normalize(ox, oy);
       separationX += dir.x * away * away * (other.isBot ? 1.2 : 0.8);
       separationY += dir.y * away * away * (other.isBot ? 1.2 : 0.8);
+
+      if (canConsumeTarget(other, bot, now)) {
+        const threatRange = 300 + other.radius * 1.4;
+        if (distance < threatRange) {
+          const threatWeight = 1 - distance / threatRange;
+          predatorAvoidX += dir.x * threatWeight * threatWeight * (other.isBot ? 2.6 : 3.2);
+          predatorAvoidY += dir.y * threatWeight * threatWeight * (other.isBot ? 2.6 : 3.2);
+        }
+      }
     }
 
-    const desiredX = toTarget.x * 1.2 + edgeAvoid.x * 2.4 + hazardAvoid.x * 2.6 + separationX * 2.5;
-    const desiredY = toTarget.y * 1.2 + edgeAvoid.y * 2.4 + hazardAvoid.y * 2.6 + separationY * 2.5;
+    const targetWeight = currentlyRetreating ? 0.75 : 1.18 + (bot.aiAggression - 1) * 0.35;
+    const edgeWeight = 2.3 * bot.aiCaution;
+    const hazardWeight = 2.6 * bot.aiCaution;
+    const separationWeight = currentlyRetreating ? 2.9 : 2.3;
+    const predatorWeight = currentlyRetreating ? 4.4 : 2.6;
+    const desiredX =
+      toTarget.x * targetWeight +
+      edgeAvoid.x * edgeWeight +
+      hazardAvoid.x * hazardWeight +
+      separationX * separationWeight +
+      predatorAvoidX * predatorWeight;
+    const desiredY =
+      toTarget.y * targetWeight +
+      edgeAvoid.y * edgeWeight +
+      hazardAvoid.y * hazardWeight +
+      separationY * separationWeight +
+      predatorAvoidY * predatorWeight;
     const move = normalize(desiredX, desiredY);
+    const moveThreshold = currentlyRetreating ? 0.12 : 0.2;
 
     bot.lastInput = {
       ...bot.lastInput,
-      up: move.y < -0.2,
-      down: move.y > 0.2,
-      left: move.x < -0.2,
-      right: move.x > 0.2,
+      up: move.y < -moveThreshold,
+      down: move.y > moveThreshold,
+      left: move.x < -moveThreshold,
+      right: move.x > moveThreshold,
     };
   }
 }
