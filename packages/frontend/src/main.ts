@@ -130,6 +130,7 @@ const QUALITY_PROFILES: Record<QualityMode, QualityProfile> = {
 };
 
 const QUALITY_STORAGE_KEY = "arena-quality-mode";
+const STATIC_CAMERA_ZOOM = 0.86;
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
@@ -210,7 +211,6 @@ class GameScene extends Phaser.Scene {
   private decorGraphics!: Phaser.GameObjects.Graphics;
   private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
-  private cameraTarget!: Phaser.GameObjects.Zone;
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
@@ -329,7 +329,6 @@ class GameScene extends Phaser.Scene {
     this.decorGraphics = this.add.graphics();
     this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
-    this.cameraTarget = this.add.zone(0, 0, 1, 1);
     this.updateHudDensity();
 
     const keyboard = this.input.keyboard;
@@ -364,8 +363,8 @@ class GameScene extends Phaser.Scene {
     this.maybeUpdateHud(true);
 
     const camera = this.cameras.main;
-    camera.startFollow(this.cameraTarget, true, 0.045, 0.045);
-    camera.setDeadzone(360, 220);
+    camera.stopFollow();
+    camera.setZoom(STATIC_CAMERA_ZOOM);
 
     keyboard.on("keydown-F8", (event: KeyboardEvent) => {
       event.preventDefault();
@@ -415,7 +414,6 @@ class GameScene extends Phaser.Scene {
     this.flushPendingInput();
 
     this.updateRenderPlayers();
-    this.updateCamera(player);
     this.maybeRedrawPickups();
     this.drawPlayers();
   }
@@ -595,19 +593,6 @@ class GameScene extends Phaser.Scene {
     this.lastDebugUpdateAt = now;
   }
 
-  private updateCamera(localPlayer: PlayerSnapshot): void {
-    const camera = this.cameras.main;
-    const render = this.renderPlayers.get(localPlayer.id);
-    const px = render?.x ?? localPlayer.x;
-    const py = render?.y ?? localPlayer.y;
-    this.cameraTarget.setPosition(px, py);
-
-    const massZoom = clamp(0.92 * Math.pow(20 / Math.max(14, localPlayer.mass), 0.14), 0.72, 1.04);
-    const viewportFactor = clamp(Math.min(this.scale.width, this.scale.height) / 980, 0.88, 1.2);
-    const desiredZoom = clamp(massZoom * viewportFactor, 0.76, 1.08);
-    camera.setZoom(Phaser.Math.Linear(camera.zoom, desiredZoom, 0.04));
-  }
-
   private syncRenderPlayersFromSnapshot(force: boolean): void {
     if (!this.snapshot) {
       return;
@@ -744,9 +729,9 @@ class GameScene extends Phaser.Scene {
 
     const camera = this.cameras.main;
     camera.setBounds(0, 0, arenaWidth, arenaHeight);
-    if (!this.getLocalPlayer()) {
-      camera.centerOn(arenaWidth / 2, arenaHeight / 2);
-    }
+    camera.stopFollow();
+    camera.setZoom(STATIC_CAMERA_ZOOM);
+    camera.centerOn(arenaWidth / 2, arenaHeight / 2);
   }
 
   private updateHudDensity(): void {
