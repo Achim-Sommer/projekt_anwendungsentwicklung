@@ -85,6 +85,9 @@ const AI_DANGER_SCAN_RADIUS = 760;
 const AI_DANGER_MASS_RATIO = 1.1;
 const AI_RETREAT_DURATION_MS = 900;
 const AI_LOOKAHEAD_MAX_SECONDS = 0.34;
+const AI_BOT_TARGET_BONUS = 16;
+const AI_HUMAN_TARGET_BONUS = 12;
+const AI_PREY_PULL_RANGE_BASE = 300;
 const DEFAULT_PLAYER_COLOR = 0x38bdf8;
 const BOT_PLAYER_COLOR = 0x64748b;
 
@@ -1332,12 +1335,13 @@ function runAi(now: number): void {
 
         const massAdvantage = bot.mass / Math.max(1, candidate.mass);
         const bountyBoost = candidate.id === bountyTarget?.id ? 52 : 0;
-        const humanBoost = candidate.isBot ? 0 : 10;
-        const distancePenalty = distance * (0.055 + 0.012 * bot.aiCaution);
+        const targetTypeBoost = candidate.isBot ? AI_BOT_TARGET_BONUS : AI_HUMAN_TARGET_BONUS;
+        const distancePenalty =
+          distance * ((candidate.isBot ? 0.044 : 0.055) + 0.011 * bot.aiCaution);
         const preyScore =
           massAdvantage * 60 * bot.aiAggression +
           bountyBoost +
-          humanBoost -
+          targetTypeBoost -
           distancePenalty;
 
         if (preyScore > bestPreyScore) {
@@ -1392,7 +1396,11 @@ function runAi(now: number): void {
       }
 
       const shouldRetreat = retreating && Boolean(nearestThreat);
-      const canPressurePrey = Boolean(bestPrey && bestPreyScore >= (22 - 8 * bot.aiAggression));
+      const requiredPreyScore =
+        bestPrey?.isBot
+          ? 14 - 7 * bot.aiAggression
+          : 20 - 8 * bot.aiAggression;
+      const canPressurePrey = Boolean(bestPrey && bestPreyScore >= requiredPreyScore);
 
       if (shouldRetreat) {
         if (bestOrb && (bestOrb.kind !== "mass" || bestOrbScore > 26)) {
@@ -1464,6 +1472,8 @@ function runAi(now: number): void {
 
     let separationX = 0;
     let separationY = 0;
+    let preyAttractX = 0;
+    let preyAttractY = 0;
     let predatorAvoidX = 0;
     let predatorAvoidY = 0;
     for (const other of list) {
@@ -1479,8 +1489,18 @@ function runAi(now: number): void {
       const distance = Math.sqrt(distSq);
       const away = 1 - distance / AI_SEPARATION_RADIUS;
       const dir = normalize(ox, oy);
-      separationX += dir.x * away * away * (other.isBot ? 1.2 : 0.8);
-      separationY += dir.y * away * away * (other.isBot ? 1.2 : 0.8);
+      separationX += dir.x * away * away * (other.isBot ? 0.72 : 1.05);
+      separationY += dir.y * away * away * (other.isBot ? 0.72 : 1.05);
+
+      if (canConsumeTarget(bot, other, now)) {
+        const engageRange = AI_PREY_PULL_RANGE_BASE + bot.radius * 1.4;
+        if (distance < engageRange) {
+          const engage = 1 - distance / engageRange;
+          const pullStrength = other.isBot ? 1.8 : 1.3;
+          preyAttractX -= dir.x * engage * engage * pullStrength;
+          preyAttractY -= dir.y * engage * engage * pullStrength;
+        }
+      }
 
       if (canConsumeTarget(other, bot, now)) {
         const threatRange = 300 + other.radius * 1.4;
@@ -1496,18 +1516,21 @@ function runAi(now: number): void {
     const edgeWeight = 2.3 * bot.aiCaution;
     const hazardWeight = 2.6 * bot.aiCaution;
     const separationWeight = currentlyRetreating ? 2.9 : 2.3;
+    const preyPullWeight = currentlyRetreating ? 0.35 : 2.15 * bot.aiAggression;
     const predatorWeight = currentlyRetreating ? 4.4 : 2.6;
     const desiredX =
       toTarget.x * targetWeight +
       edgeAvoid.x * edgeWeight +
       hazardAvoid.x * hazardWeight +
       separationX * separationWeight +
+      preyAttractX * preyPullWeight +
       predatorAvoidX * predatorWeight;
     const desiredY =
       toTarget.y * targetWeight +
       edgeAvoid.y * edgeWeight +
       hazardAvoid.y * hazardWeight +
       separationY * separationWeight +
+      preyAttractY * preyPullWeight +
       predatorAvoidY * predatorWeight;
     const move = normalize(desiredX, desiredY);
     const moveThreshold = currentlyRetreating ? 0.12 : 0.2;
