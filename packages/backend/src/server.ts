@@ -43,7 +43,7 @@ const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
 const SPAWN_SAFE_HAZARD_DISTANCE = 120;
 const SPAWN_ATTEMPTS = 40;
-const TARGET_TOTAL_PLAYERS = 4;
+const TARGET_BOT_COUNT = 10;
 
 const ORB_SPAWN_INTERVAL_MS = 420;
 const ORB_SPAWN_INTERVAL_MS_FAST = 180;
@@ -1393,9 +1393,8 @@ function runAi(now: number): void {
 }
 
 function maintainBots(): void {
-  const humans = Array.from(players.values()).filter((player) => !player.isBot).length;
   const bots = Array.from(players.values()).filter((player) => player.isBot);
-  const targetBots = Math.max(0, TARGET_TOTAL_PLAYERS - humans);
+  const targetBots = TARGET_BOT_COUNT;
 
   if (bots.length < targetBots) {
     for (let i = bots.length; i < targetBots; i += 1) {
