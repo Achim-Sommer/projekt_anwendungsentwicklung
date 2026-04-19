@@ -168,6 +168,26 @@ const ANNOUNCEMENT_HOLD_MS = 4200;
 const ANNOUNCEMENT_FADE_MS = 260;
 const ROCKET_TRAIL_MS = 360;
 
+type StyledPickupKind = "speed" | "shield" | "stealth" | "score";
+
+const STYLED_PICKUP_ICON_KEYS: Record<StyledPickupKind, string> = {
+  speed: "speed-pickup-icon",
+  shield: "shield-pickup-icon",
+  stealth: "stealth-pickup-icon",
+  score: "score-pickup-icon",
+};
+
+const STYLED_PICKUP_PHASE_OFFSETS: Record<StyledPickupKind, number> = {
+  speed: 0,
+  shield: 1.1,
+  stealth: 2.2,
+  score: 3.1,
+};
+
+function isStyledPickupKind(kind: PickupKind): kind is StyledPickupKind {
+  return kind === "speed" || kind === "shield" || kind === "stealth" || kind === "score";
+}
+
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
   if (stored === "low") {
@@ -249,6 +269,7 @@ class GameScene extends Phaser.Scene {
   private playerGraphics!: Phaser.GameObjects.Graphics;
   private rocketTrailGraphics!: Phaser.GameObjects.Graphics;
   private rocketPickupSprites = new Map<string, Phaser.GameObjects.Image>();
+  private styledPickupSprites = new Map<string, Phaser.GameObjects.Image>();
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
@@ -345,6 +366,7 @@ class GameScene extends Phaser.Scene {
       this.hudDirty = true;
       this.clearAnnouncementQueue();
       this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
     };
     this.onConnectError = () => {
       this.updateStatus();
@@ -355,6 +377,7 @@ class GameScene extends Phaser.Scene {
       this.arena = payload.arena;
       this.clearAnnouncementQueue();
       this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
       this.rocketTrails = [];
       this.rocketTrailCounter = 1;
       if (this.rocketTrailGraphics) {
@@ -406,6 +429,10 @@ class GameScene extends Phaser.Scene {
 
   preload(): void {
     this.load.image("rocket-pickup-icon", "/rocket-pickup.svg");
+    this.load.image("speed-pickup-icon", "/speed-pickup.svg");
+    this.load.image("shield-pickup-icon", "/shield-pickup.svg");
+    this.load.image("stealth-pickup-icon", "/stealth-pickup.svg");
+    this.load.image("score-pickup-icon", "/score-pickup.svg");
   }
 
   create(): void {
@@ -1114,6 +1141,7 @@ class GameScene extends Phaser.Scene {
   private drawPickups(): void {
     if (!this.snapshot) {
       this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
       return;
     }
 
@@ -1121,6 +1149,7 @@ class GameScene extends Phaser.Scene {
     const margin = this.qualityProfile.pickupMargin;
     this.pickupGraphics.clear();
     const visibleRocketOrbs: ForceOrb[] = [];
+    const visibleStyledOrbs: ForceOrb[] = [];
 
     for (const orb of this.snapshot.pickups) {
       if (
@@ -1137,10 +1166,16 @@ class GameScene extends Phaser.Scene {
         continue;
       }
 
+      if (isStyledPickupKind(orb.kind)) {
+        visibleStyledOrbs.push(orb);
+        continue;
+      }
+
       this.drawOrb(orb);
     }
 
     this.updateRocketPickupSprites(visibleRocketOrbs);
+    this.updateStyledPickupSprites(visibleStyledOrbs);
   }
 
   private clearRocketPickupSprites(): void {
@@ -1148,6 +1183,13 @@ class GameScene extends Phaser.Scene {
       sprite.destroy();
     }
     this.rocketPickupSprites.clear();
+  }
+
+  private clearStyledPickupSprites(): void {
+    for (const sprite of this.styledPickupSprites.values()) {
+      sprite.destroy();
+    }
+    this.styledPickupSprites.clear();
   }
 
   private updateRocketPickupSprites(visibleRocketOrbs: ForceOrb[]): void {
@@ -1185,37 +1227,85 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private drawOrb(orb: ForceOrb): void {
-    const styleByKind: Record<PickupKind, { core: number; ring: number; alpha: number }> = {
-      mass: { core: 0xfde047, ring: 0x84cc16, alpha: 0.9 },
-      speed: { core: 0x22d3ee, ring: 0x0369a1, alpha: 0.88 },
-      shield: { core: 0x60a5fa, ring: 0x1d4ed8, alpha: 0.88 },
-      stealth: { core: 0xc4b5fd, ring: 0x7c3aed, alpha: 0.86 },
-      score: { core: 0xfb923c, ring: 0x9a3412, alpha: 0.9 },
-      rocket: { core: 0xf87171, ring: 0x991b1b, alpha: 0.94 },
-    };
+  private updateStyledPickupSprites(visibleStyledOrbs: ForceOrb[]): void {
+    const visibleIds = new Set<string>();
 
-    const style = styleByKind[orb.kind] ?? styleByKind.mass;
+    for (const orb of visibleStyledOrbs) {
+      if (!isStyledPickupKind(orb.kind)) {
+        continue;
+      }
+
+      visibleIds.add(orb.id);
+      const textureKey = STYLED_PICKUP_ICON_KEYS[orb.kind];
+
+      let sprite = this.styledPickupSprites.get(orb.id);
+      if (!sprite) {
+        sprite = this.add.image(orb.x, orb.y, textureKey);
+        sprite.setDepth(0);
+        this.children.moveBelow(sprite, this.playerGraphics);
+        this.styledPickupSprites.set(orb.id, sprite);
+      }
+
+      if (sprite.texture.key !== textureKey) {
+        sprite.setTexture(textureKey);
+      }
+
+      const phaseOffset = STYLED_PICKUP_PHASE_OFFSETS[orb.kind];
+      const phase = this.time.now * 0.0048 + orb.x * 0.01 + orb.y * 0.006 + phaseOffset;
+      const pulse = 0.92 + 0.1 * Math.sin(phase);
+      const targetSize = (orb.radius * 2 + 11) * pulse;
+      const scale = targetSize / 64;
+
+      let rotation = Math.sin(phase * 0.9) * 0.04;
+      if (orb.kind === "speed") {
+        rotation = -0.12 + Math.sin(phase * 1.35) * 0.18;
+      } else if (orb.kind === "score") {
+        rotation = (this.time.now * 0.0012 + phaseOffset) % (Math.PI * 2);
+      } else if (orb.kind === "stealth") {
+        rotation = Math.sin(phase * 0.7) * 0.08;
+      }
+
+      let alpha = 0.9 + 0.1 * Math.sin(phase + 0.6);
+      if (orb.kind === "stealth") {
+        alpha = 0.76 + 0.16 * (0.5 + 0.5 * Math.sin(phase * 1.2));
+      }
+
+      sprite.setPosition(orb.x, orb.y);
+      sprite.setScale(scale);
+      sprite.setRotation(rotation);
+      sprite.setAlpha(alpha);
+      sprite.setVisible(true);
+    }
+
+    for (const [orbId, sprite] of this.styledPickupSprites) {
+      if (visibleIds.has(orbId)) {
+        continue;
+      }
+      sprite.destroy();
+      this.styledPickupSprites.delete(orbId);
+    }
+  }
+
+  private drawOrb(orb: ForceOrb): void {
     const detail = this.qualityProfile.pickupDetail;
-    const phase = this.time.now * 0.006 + orb.x * 0.013 + orb.y * 0.007;
+    const phase = this.time.now * 0.0058 + orb.x * 0.013 + orb.y * 0.007;
     const pulse = 0.92 + 0.08 * Math.sin(phase);
 
     if (detail === "low") {
-      this.pickupGraphics.fillStyle(style.core, style.alpha * 0.9);
+      this.pickupGraphics.fillStyle(0xfde047, 0.88);
       this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.35);
-      this.drawPickupGlyph(orb.kind, orb.x, orb.y, orb.radius * 0.76, detail);
+      this.pickupGraphics.fillStyle(0xffffff, 0.5);
+      this.pickupGraphics.fillCircle(orb.x - orb.radius * 0.26, orb.y - orb.radius * 0.24, 1.1);
       return;
     }
 
-    this.pickupGraphics.fillStyle(style.ring, 0.16);
+    this.pickupGraphics.fillStyle(0x84cc16, 0.16);
     this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4 + pulse * 0.8);
 
-    this.pickupGraphics.fillStyle(style.core, style.alpha);
+    this.pickupGraphics.fillStyle(0xfde047, 0.9);
     this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7 + pulse * 0.2);
-    this.pickupGraphics.lineStyle(1, style.ring, 0.62);
+    this.pickupGraphics.lineStyle(1, 0x84cc16, 0.62);
     this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.2);
-
-    this.drawPickupGlyph(orb.kind, orb.x, orb.y, orb.radius * 0.9, detail);
 
     if (detail === "high") {
       this.pickupGraphics.lineStyle(1, 0xffffff, 0.22);
@@ -1223,114 +1313,6 @@ class GameScene extends Phaser.Scene {
       this.pickupGraphics.fillStyle(0xffffff, 0.16);
       this.pickupGraphics.fillCircle(orb.x - orb.radius * 0.28, orb.y - orb.radius * 0.32, 1.5);
     }
-  }
-
-  private drawPickupGlyph(
-    kind: PickupKind,
-    x: number,
-    y: number,
-    radius: number,
-    detail: "low" | "normal" | "high",
-  ): void {
-    if (kind === "speed") {
-      this.drawSpeedGlyph(x, y, radius, detail);
-      return;
-    }
-    if (kind === "shield") {
-      this.drawShieldGlyph(x, y, radius, detail);
-      return;
-    }
-    if (kind === "stealth") {
-      this.drawStealthGlyph(x, y, radius, detail);
-      return;
-    }
-    if (kind === "score") {
-      this.drawScoreGlyph(x, y, radius, detail);
-      return;
-    }
-    if (kind === "mass") {
-      this.drawMassGlyph(x, y, radius, detail);
-    }
-  }
-
-  private drawSpeedGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
-    const s = radius * 0.95;
-    const points = [
-      new Phaser.Geom.Point(x - s * 0.2, y - s),
-      new Phaser.Geom.Point(x + s * 0.12, y - s * 0.28),
-      new Phaser.Geom.Point(x - s * 0.05, y - s * 0.28),
-      new Phaser.Geom.Point(x + s * 0.2, y + s),
-      new Phaser.Geom.Point(x - s * 0.12, y + s * 0.26),
-      new Phaser.Geom.Point(x + s * 0.05, y + s * 0.26),
-    ];
-
-    this.pickupGraphics.fillStyle(0xf8fafc, detail === "low" ? 0.84 : 0.95);
-    this.pickupGraphics.fillPoints(points, true);
-    if (detail !== "low") {
-      this.pickupGraphics.lineStyle(1, 0x0f172a, 0.5);
-      this.pickupGraphics.strokePoints(points, true);
-    }
-  }
-
-  private drawShieldGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
-    const w = radius * 0.95;
-    const h = radius * 1.1;
-    const points = [
-      new Phaser.Geom.Point(x, y - h),
-      new Phaser.Geom.Point(x + w * 0.82, y - h * 0.38),
-      new Phaser.Geom.Point(x + w * 0.6, y + h * 0.5),
-      new Phaser.Geom.Point(x, y + h),
-      new Phaser.Geom.Point(x - w * 0.6, y + h * 0.5),
-      new Phaser.Geom.Point(x - w * 0.82, y - h * 0.38),
-    ];
-
-    this.pickupGraphics.fillStyle(0xe2e8f0, detail === "low" ? 0.82 : 0.94);
-    this.pickupGraphics.fillPoints(points, true);
-    this.pickupGraphics.lineStyle(1, 0x1e3a8a, 0.62);
-    this.pickupGraphics.strokePoints(points, true);
-
-    this.pickupGraphics.lineStyle(1, 0x60a5fa, 0.75);
-    this.pickupGraphics.lineBetween(x, y - h * 0.8, x, y + h * 0.78);
-  }
-
-  private drawStealthGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
-    const w = radius * 2.15;
-    const h = radius * 1.08;
-    this.pickupGraphics.fillStyle(0x0f172a, detail === "low" ? 0.2 : 0.28);
-    this.pickupGraphics.fillEllipse(x, y, w, h);
-    this.pickupGraphics.lineStyle(1.4, 0xf8fafc, 0.9);
-    this.pickupGraphics.strokeEllipse(x, y, w, h);
-    this.pickupGraphics.fillStyle(0xf8fafc, 0.9);
-    this.pickupGraphics.fillCircle(x, y, radius * 0.28);
-    this.pickupGraphics.lineStyle(1.5, 0x7c3aed, 0.78);
-    this.pickupGraphics.lineBetween(x - radius * 1.15, y + radius * 0.9, x + radius * 1.15, y - radius * 0.9);
-  }
-
-  private drawScoreGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
-    const outer = radius * 0.95;
-    this.pickupGraphics.fillStyle(0xfef3c7, detail === "low" ? 0.78 : 0.9);
-    this.pickupGraphics.fillCircle(x, y, outer);
-    this.pickupGraphics.lineStyle(1, 0xb45309, 0.72);
-    this.pickupGraphics.strokeCircle(x, y, outer);
-
-    const starOuter = radius * 0.48;
-    const starInner = radius * 0.22;
-    const starPoints: Phaser.Geom.Point[] = [];
-    for (let i = 0; i < 10; i += 1) {
-      const angle = -Math.PI / 2 + (Math.PI * i) / 5;
-      const rr = i % 2 === 0 ? starOuter : starInner;
-      starPoints.push(new Phaser.Geom.Point(x + Math.cos(angle) * rr, y + Math.sin(angle) * rr));
-    }
-    this.pickupGraphics.fillStyle(0xf59e0b, 0.95);
-    this.pickupGraphics.fillPoints(starPoints, true);
-  }
-
-  private drawMassGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
-    const alpha = detail === "low" ? 0.62 : 0.78;
-    this.pickupGraphics.fillStyle(0xffffff, alpha);
-    this.pickupGraphics.fillCircle(x - radius * 0.42, y - radius * 0.2, radius * 0.22);
-    this.pickupGraphics.fillCircle(x + radius * 0.08, y - radius * 0.04, radius * 0.18);
-    this.pickupGraphics.fillCircle(x + radius * 0.36, y + radius * 0.18, radius * 0.14);
   }
 
   private detectRocketShotVisuals(previousSnapshot: GameSnapshot | null): void {
@@ -1848,6 +1830,7 @@ class GameScene extends Phaser.Scene {
     this.nameLabels.clear();
     this.lastLabelText.clear();
     this.clearRocketPickupSprites();
+    this.clearStyledPickupSprites();
     this.rocketTrails = [];
     if (this.rocketTrailGraphics) {
       this.rocketTrailGraphics.clear();
