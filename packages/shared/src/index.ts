@@ -20,7 +20,7 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
-export type PickupKind = "mass" | "speed" | "shield" | "stealth";
+export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score";
 
 export interface ForceOrb {
   id: string;
@@ -55,6 +55,8 @@ export interface PlayerSnapshot {
   speedBoostMsLeft: number;
   invulnerableMsLeft: number;
   stealthMsLeft: number;
+  stunnedMsLeft: number;
+  shockCooldownMsLeft: number;
   mass: number;
   score: number;
   isBot: boolean;
@@ -108,6 +110,7 @@ export interface PlayerInputPayload {
   down: boolean;
   left: boolean;
   right: boolean;
+  ability: boolean;
 }
 
 export interface DebugPingPayload {

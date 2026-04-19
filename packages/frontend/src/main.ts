@@ -256,8 +256,8 @@ class GameScene extends Phaser.Scene {
   private localPlayerId = "";
   private inputSeq = 0;
   private lastInputSentAt = 0;
-  private lastSentInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
-  private pendingInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
+  private lastSentInput: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean } | null = null;
+  private pendingInput: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean } | null = null;
   private hudCompact = false;
   private leaderboardLines = 8;
   private hudDirty = true;
@@ -287,6 +287,7 @@ class GameScene extends Phaser.Scene {
     down: Phaser.Input.Keyboard.Key;
     left: Phaser.Input.Keyboard.Key;
     right: Phaser.Input.Keyboard.Key;
+    ability: Phaser.Input.Keyboard.Key;
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
@@ -386,6 +387,7 @@ class GameScene extends Phaser.Scene {
       down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S, false),
       left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A, false),
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
+      ability: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, false),
     };
     // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
     keyboard.disableGlobalCapture();
@@ -417,6 +419,9 @@ class GameScene extends Phaser.Scene {
     keyboard.on("keydown-F8", (event: KeyboardEvent) => {
       event.preventDefault();
       this.cycleQualityMode();
+    });
+    keyboard.on("keydown-SPACE", (event: KeyboardEvent) => {
+      event.preventDefault();
     });
     keyboard.on("keydown-F3", (event: KeyboardEvent) => {
       event.preventDefault();
@@ -458,7 +463,10 @@ class GameScene extends Phaser.Scene {
     }
 
     const moveInput = this.getMovementInput(player);
-    this.scheduleInputSend(moveInput);
+    this.scheduleInputSend({
+      ...moveInput,
+      ability: this.keys.ability.isDown,
+    });
     this.flushPendingInput();
 
     this.updateRenderPlayers();
@@ -519,13 +527,25 @@ class GameScene extends Phaser.Scene {
   }
 
   private inputStatesEqual(
-    a: { up: boolean; down: boolean; left: boolean; right: boolean },
-    b: { up: boolean; down: boolean; left: boolean; right: boolean },
+    a: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean },
+    b: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean },
   ): boolean {
-    return a.up === b.up && a.down === b.down && a.left === b.left && a.right === b.right;
+    return (
+      a.up === b.up &&
+      a.down === b.down &&
+      a.left === b.left &&
+      a.right === b.right &&
+      a.ability === b.ability
+    );
   }
 
-  private scheduleInputSend(input: { up: boolean; down: boolean; left: boolean; right: boolean }): void {
+  private scheduleInputSend(input: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+  }): void {
     if (this.lastSentInput && this.inputStatesEqual(input, this.lastSentInput)) {
       this.pendingInput = null;
       return;
@@ -550,6 +570,7 @@ class GameScene extends Phaser.Scene {
       down: this.pendingInput.down,
       left: this.pendingInput.left,
       right: this.pendingInput.right,
+      ability: this.pendingInput.ability,
     };
     socket.emit("input", payload);
     this.lastInputSentAt = this.time.now;
@@ -1029,6 +1050,7 @@ class GameScene extends Phaser.Scene {
       speed: { core: 0x22d3ee, ring: 0x0369a1, alpha: 0.88 },
       shield: { core: 0x60a5fa, ring: 0x1d4ed8, alpha: 0.88 },
       stealth: { core: 0xc4b5fd, ring: 0x7c3aed, alpha: 0.86 },
+      score: { core: 0xfb923c, ring: 0x9a3412, alpha: 0.9 },
     };
 
     const style = styleByKind[orb.kind] ?? styleByKind.mass;
@@ -1191,6 +1213,7 @@ class GameScene extends Phaser.Scene {
 
     for (const player of visiblePlayers) {
       const hasSpawnProtection = player.spawnProtectionMsLeft > 0;
+      const hasStun = player.stunnedMsLeft > 0;
       const isBountyTarget = this.snapshot?.bountyTargetId === player.id;
       const protectionPulse = hasSpawnProtection
         ? 0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this.time.now / 130))
@@ -1206,6 +1229,12 @@ class GameScene extends Phaser.Scene {
       if (isBountyTarget) {
         this.playerGraphics.lineStyle(3, 0xf59e0b, 0.9);
         this.playerGraphics.strokeCircle(px, py, player.radius + 5);
+      }
+
+      if (hasStun) {
+        const stunPulse = 0.65 + 0.3 * (0.5 + 0.5 * Math.sin(this.time.now / 90));
+        this.playerGraphics.lineStyle(2, 0xfacc15, stunPulse);
+        this.playerGraphics.strokeCircle(px, py, player.radius + 9);
       }
 
       let label = this.nameLabels.get(player.id);
@@ -1242,7 +1271,8 @@ class GameScene extends Phaser.Scene {
       const shieldMarker = hasSpawnProtection ? " [SAFE]" : "";
       const invulnMarker = player.invulnerableMsLeft > 0 ? " [INV]" : "";
       const stealthMarker = player.stealthMsLeft > 0 ? " [STL]" : "";
-      const labelText = `${player.name}${botMarker}${bountyMarker}${shieldMarker}${invulnMarker}${stealthMarker}`;
+      const stunMarker = hasStun ? " [STUN]" : "";
+      const labelText = `${player.name}${botMarker}${bountyMarker}${shieldMarker}${invulnMarker}${stealthMarker}${stunMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -1293,6 +1323,14 @@ class GameScene extends Phaser.Scene {
         local.spawnProtectionMsLeft > 0
           ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
           : "";
+      const stunText =
+        local.stunnedMsLeft > 0
+          ? ` | Paralyse: ${(local.stunnedMsLeft / 1000).toFixed(1)}s`
+          : "";
+      const shockText =
+        local.shockCooldownMsLeft > 0
+          ? ` | Blitz-CD: ${(local.shockCooldownMsLeft / 1000).toFixed(1)}s`
+          : " | Blitz: SPACE bereit";
       const effects = [
         this.formatEffectLabel("Speed", local.speedBoostMsLeft),
         this.formatEffectLabel("Unverwundbar", local.invulnerableMsLeft),
@@ -1302,7 +1340,7 @@ class GameScene extends Phaser.Scene {
       const localBountyText =
         bountyTargetId === local.id ? ` | Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P` : "";
       hudPlayerElement.textContent =
-        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${effectText}${localBountyText}`;
+        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${stunText}${effectText}${shockText}${localBountyText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
