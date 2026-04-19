@@ -1119,6 +1119,69 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (hazard.type === "pit") {
+      const centerX = hazard.x + hazard.width / 2;
+      const centerY = hazard.y + hazard.height / 2;
+
+      this.hazardGraphics.fillStyle(0x090f1c, 0.9);
+      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 12);
+
+      this.hazardGraphics.fillStyle(0x141f33, 0.82);
+      this.hazardGraphics.fillRoundedRect(
+        hazard.x + 3,
+        hazard.y + 3,
+        hazard.width - 6,
+        hazard.height - 6,
+        10
+      );
+
+      this.hazardGraphics.lineStyle(3, 0x475569, 0.36);
+      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 12);
+      this.hazardGraphics.lineStyle(2, 0x0f172a, 0.8);
+      this.hazardGraphics.strokeRoundedRect(
+        hazard.x + 2,
+        hazard.y + 2,
+        hazard.width - 4,
+        hazard.height - 4,
+        10
+      );
+
+      this.hazardGraphics.fillStyle(0x1b2a42, 0.56);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.86, hazard.height * 0.66);
+      this.hazardGraphics.fillStyle(0x121d31, 0.72);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.68, hazard.height * 0.5);
+      this.hazardGraphics.fillStyle(0x070b14, 0.92);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.48, hazard.height * 0.34);
+
+      this.hazardGraphics.lineStyle(2, 0x64748b, 0.3);
+      this.hazardGraphics.strokeEllipse(centerX, centerY, hazard.width * 0.9, hazard.height * 0.7);
+      this.hazardGraphics.lineStyle(1, 0xffffff, 0.1);
+      this.hazardGraphics.strokeEllipse(
+        centerX,
+        centerY - hazard.height * 0.03,
+        hazard.width * 0.44,
+        hazard.height * 0.25
+      );
+
+      this.hazardGraphics.lineStyle(1, 0x334155, 0.24);
+      const rayCount = 8;
+      for (let i = 0; i < rayCount; i += 1) {
+        const angle = (Math.PI * 2 * i) / rayCount;
+        const startX = centerX + Math.cos(angle) * (hazard.width * 0.12);
+        const startY = centerY + Math.sin(angle) * (hazard.height * 0.09);
+        const endX = centerX + Math.cos(angle) * (hazard.width * 0.31);
+        const endY = centerY + Math.sin(angle) * (hazard.height * 0.23);
+        this.hazardGraphics.lineBetween(startX, startY, endX, endY);
+      }
+
+      this.hazardGraphics.fillStyle(0x94a3b8, 0.24);
+      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.28, centerY - hazard.height * 0.2, 2.2);
+      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.24, centerY - hazard.height * 0.14, 1.8);
+      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.2, centerY + hazard.height * 0.18, 1.6);
+
+      return;
+    }
+
     this.hazardGraphics.fillStyle(0x1e293b, 0.76);
     this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
     this.hazardGraphics.fillStyle(0x334155, 0.8);

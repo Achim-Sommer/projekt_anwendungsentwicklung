@@ -63,10 +63,10 @@ const SPECIAL_PICKUP_RADIUS = 9;
 const SPECIAL_SPEED_DURATION_MS = 5000;
 const SPECIAL_SHIELD_DURATION_MS = 5500;
 const SPECIAL_STEALTH_DURATION_MS = 6500;
-const SHOCK_RANGE = 195;
-const SHOCK_RANGE_SQ = SHOCK_RANGE * SHOCK_RANGE;
+const SHOCK_EDGE_RANGE = 195;
 const SHOCK_STUN_MS = 1700;
 const SHOCK_COOLDOWN_MS = 7200;
+const BOT_SHOCK_COOLDOWN_MULTIPLIER = 2;
 const SHOCK_SCORE_BONUS = 4;
 const KILL_MASS_BONUS = 20;
 const CONSUME_MIN_RATIO = 1.22;
@@ -1122,13 +1122,20 @@ function canShockTarget(source: ServerPlayer, target: ServerPlayer, now: number)
   return true;
 }
 
+function isWithinShockEdgeRange(source: ServerPlayer, target: ServerPlayer): boolean {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const centerRange = SHOCK_EDGE_RANGE + source.radius + target.radius;
+  return dx * dx + dy * dy <= centerRange * centerRange;
+}
+
 function tryShockNearestTarget(source: ServerPlayer, now: number): void {
   if (!source.alive || source.stunnedUntil > now || source.shockCooldownUntil > now) {
     return;
   }
 
   let bestTarget: ServerPlayer | undefined;
-  let bestDistSq = SHOCK_RANGE_SQ;
+  let bestEdgeDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of players.values()) {
     if (!canShockTarget(source, candidate, now)) {
@@ -1137,13 +1144,14 @@ function tryShockNearestTarget(source: ServerPlayer, now: number): void {
 
     const dx = candidate.x - source.x;
     const dy = candidate.y - source.y;
-    const distSq = dx * dx + dy * dy;
-    if (distSq > SHOCK_RANGE_SQ || distSq > bestDistSq) {
+    const centerDistance = Math.hypot(dx, dy);
+    const edgeDistance = centerDistance - (source.radius + candidate.radius);
+    if (edgeDistance > SHOCK_EDGE_RANGE || edgeDistance >= bestEdgeDistance) {
       continue;
     }
 
     bestTarget = candidate;
-    bestDistSq = distSq;
+    bestEdgeDistance = edgeDistance;
   }
 
   if (!bestTarget) {
@@ -1155,7 +1163,10 @@ function tryShockNearestTarget(source: ServerPlayer, now: number): void {
   bestTarget.vy = 0;
   bestTarget.lastThreatBy = source.id;
 
-  source.shockCooldownUntil = now + SHOCK_COOLDOWN_MS;
+  const shockCooldownMs = source.isBot
+    ? SHOCK_COOLDOWN_MS * BOT_SHOCK_COOLDOWN_MULTIPLIER
+    : SHOCK_COOLDOWN_MS;
+  source.shockCooldownUntil = now + shockCooldownMs;
   source.score += SHOCK_SCORE_BONUS;
   combatBoostUntil = Math.max(combatBoostUntil, now + 1800);
 }
@@ -1689,13 +1700,40 @@ function runAi(now: number): void {
     const move = normalize(desiredX, desiredY);
     const moveThreshold = currentlyRetreating ? 0.12 : 0.2;
 
+    let shockThreatInRange = false;
+    let shockPreyInRange = false;
+    if (bot.shockCooldownUntil <= now && bot.stunnedUntil <= now) {
+      for (const candidate of list) {
+        if (candidate.id === bot.id) {
+          continue;
+        }
+        if (!canShockTarget(bot, candidate, now)) {
+          continue;
+        }
+
+        if (!isWithinShockEdgeRange(bot, candidate)) {
+          continue;
+        }
+
+        if (canConsumeTarget(candidate, bot, now)) {
+          shockThreatInRange = true;
+          break;
+        }
+
+        if (canConsumeTarget(bot, candidate, now)) {
+          shockPreyInRange = true;
+        }
+      }
+    }
+    const shouldUseShock = shockThreatInRange || (!currentlyRetreating && shockPreyInRange);
+
     bot.lastInput = {
       ...bot.lastInput,
       up: move.y < -moveThreshold,
       down: move.y > moveThreshold,
       left: move.x < -moveThreshold,
       right: move.x > moveThreshold,
-      ability: false,
+      ability: shouldUseShock,
     };
   }
 }
