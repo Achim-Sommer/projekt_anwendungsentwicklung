@@ -164,6 +164,8 @@ const STATIC_CAMERA_ZOOM = 0.86;
 const SEMI_STATIC_CAMERA_LERP = 0.035;
 const SEMI_STATIC_DEADZONE_X_RATIO = 0.42;
 const SEMI_STATIC_DEADZONE_Y_RATIO = 0.36;
+const ANNOUNCEMENT_HOLD_MS = 4200;
+const ANNOUNCEMENT_FADE_MS = 260;
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
@@ -706,8 +708,8 @@ class GameScene extends Phaser.Scene {
         announcementOverlayElement.style.display = "none";
         this.announcementActive = false;
         this.processAnnouncementQueue();
-      }, 220);
-    }, 2400);
+      }, ANNOUNCEMENT_FADE_MS);
+    }, ANNOUNCEMENT_HOLD_MS);
   }
 
   private clearAnnouncementQueue(): void {
@@ -1123,61 +1125,60 @@ class GameScene extends Phaser.Scene {
       const centerX = hazard.x + hazard.width / 2;
       const centerY = hazard.y + hazard.height / 2;
 
-      this.hazardGraphics.fillStyle(0x090f1c, 0.9);
-      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 12);
+      this.hazardGraphics.fillStyle(0x03060f, 0.36);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 1.08, hazard.height * 0.86);
 
-      this.hazardGraphics.fillStyle(0x141f33, 0.82);
+      this.hazardGraphics.fillStyle(0x060b16, 0.96);
+      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 13);
+      this.hazardGraphics.fillStyle(0x111c30, 0.84);
       this.hazardGraphics.fillRoundedRect(
         hazard.x + 3,
         hazard.y + 3,
         hazard.width - 6,
         hazard.height - 6,
-        10
+        11
       );
 
-      this.hazardGraphics.lineStyle(3, 0x475569, 0.36);
-      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 12);
-      this.hazardGraphics.lineStyle(2, 0x0f172a, 0.8);
+      this.hazardGraphics.lineStyle(4, 0x64748b, 0.24);
+      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 13);
+      this.hazardGraphics.lineStyle(2, 0x0f172a, 0.88);
       this.hazardGraphics.strokeRoundedRect(
         hazard.x + 2,
         hazard.y + 2,
         hazard.width - 4,
         hazard.height - 4,
-        10
+        11
       );
 
-      this.hazardGraphics.fillStyle(0x1b2a42, 0.56);
-      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.86, hazard.height * 0.66);
-      this.hazardGraphics.fillStyle(0x121d31, 0.72);
-      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.68, hazard.height * 0.5);
-      this.hazardGraphics.fillStyle(0x070b14, 0.92);
-      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.48, hazard.height * 0.34);
+      this.hazardGraphics.fillStyle(0x22334e, 0.5);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.9, hazard.height * 0.68);
+      this.hazardGraphics.fillStyle(0x131d2f, 0.74);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.72, hazard.height * 0.53);
+      this.hazardGraphics.fillStyle(0x0a101b, 0.88);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.54, hazard.height * 0.39);
+      this.hazardGraphics.fillStyle(0x02050b, 0.96);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.38, hazard.height * 0.26);
 
-      this.hazardGraphics.lineStyle(2, 0x64748b, 0.3);
-      this.hazardGraphics.strokeEllipse(centerX, centerY, hazard.width * 0.9, hazard.height * 0.7);
-      this.hazardGraphics.lineStyle(1, 0xffffff, 0.1);
-      this.hazardGraphics.strokeEllipse(
-        centerX,
-        centerY - hazard.height * 0.03,
-        hazard.width * 0.44,
-        hazard.height * 0.25
-      );
+      this.hazardGraphics.lineStyle(2, 0x93a9c3, 0.2);
+      this.hazardGraphics.strokeEllipse(centerX, centerY, hazard.width * 0.92, hazard.height * 0.7);
+      this.hazardGraphics.lineStyle(1, 0xffffff, 0.08);
+      this.hazardGraphics.strokeEllipse(centerX, centerY - hazard.height * 0.045, hazard.width * 0.6, hazard.height * 0.2);
 
-      this.hazardGraphics.lineStyle(1, 0x334155, 0.24);
-      const rayCount = 8;
-      for (let i = 0; i < rayCount; i += 1) {
-        const angle = (Math.PI * 2 * i) / rayCount;
-        const startX = centerX + Math.cos(angle) * (hazard.width * 0.12);
-        const startY = centerY + Math.sin(angle) * (hazard.height * 0.09);
-        const endX = centerX + Math.cos(angle) * (hazard.width * 0.31);
-        const endY = centerY + Math.sin(angle) * (hazard.height * 0.23);
-        this.hazardGraphics.lineBetween(startX, startY, endX, endY);
+      const crackCount = 11;
+      this.hazardGraphics.lineStyle(1, 0x334155, 0.32);
+      for (let i = 0; i < crackCount; i += 1) {
+        const angle = (Math.PI * 2 * i) / crackCount;
+        const rimX = centerX + Math.cos(angle) * (hazard.width * 0.39);
+        const rimY = centerY + Math.sin(angle) * (hazard.height * 0.29);
+        const innerX = centerX + Math.cos(angle + 0.18) * (hazard.width * 0.2);
+        const innerY = centerY + Math.sin(angle + 0.18) * (hazard.height * 0.14);
+        this.hazardGraphics.lineBetween(rimX, rimY, innerX, innerY);
       }
 
-      this.hazardGraphics.fillStyle(0x94a3b8, 0.24);
-      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.28, centerY - hazard.height * 0.2, 2.2);
-      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.24, centerY - hazard.height * 0.14, 1.8);
-      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.2, centerY + hazard.height * 0.18, 1.6);
+      this.hazardGraphics.fillStyle(0xcbd5e1, 0.18);
+      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.31, centerY - hazard.height * 0.16, 2.4);
+      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.26, centerY - hazard.height * 0.21, 1.8);
+      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.18, centerY + hazard.height * 0.2, 1.6);
 
       return;
     }
@@ -1201,35 +1202,9 @@ class GameScene extends Phaser.Scene {
     this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.64, hazard.height * 0.42);
   }
 
-  private createHazardLabel(hazard: HazardZone): void {
-    if (this.scale.width < 980 || this.scale.height < 620) {
-      return;
-    }
-
-    let title = "ZONE";
-    let icon = "◼";
-    if (hazard.type === "lava") {
-      title = "LAVA";
-      icon = "🔥";
-    } else if (hazard.type === "electric") {
-      title = "ELEKTROFELD";
-      icon = "⚡";
-    } else if (hazard.type === "pit") {
-      title = "ABGRUND";
-      icon = "🌀";
-    }
-
-    // Kleine Label-Box mit Icon verbessert Lesbarkeit in hektischen Situationen.
-    const label = this.add
-      .text(hazard.x + 10, hazard.y + 8, `${icon} ${title}`, {
-        fontSize: "12px",
-        color: "#0f172a",
-        fontStyle: "bold",
-        backgroundColor: "#f8fafccc",
-        padding: { left: 8, right: 8, top: 4, bottom: 4 },
-      })
-      .setDepth(4);
-    this.hazardLabels.push(label);
+  private createHazardLabel(_hazard: HazardZone): void {
+    // Beschriftung fuer Hazard-Zonen ist bewusst deaktiviert.
+    return;
   }
 
   private drawPlayers(): void {
@@ -1413,18 +1388,27 @@ class GameScene extends Phaser.Scene {
         ? this.snapshot.leaderboard
         : [...(this.snapshot?.players ?? [])].sort((a, b) => b.score - a.score);
 
-    const ranking = rankingSource
+    const nameWidth = this.hudCompact ? 10 : 12;
+    const rankingRows = rankingSource
       .slice(0, this.leaderboardLines)
       .map((player, index) => {
-        const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
-        const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
-        const role = player.isBot ? "BOT" : "PLY";
-        const bountyMarker = bountyTargetId && player.id === bountyTargetId ? " BNT" : "";
-        return `${rankBadge} ${shortName} ${role}${bountyMarker}  ${player.score} P`;
-      })
-      .join("\n");
+        const rankToken = String(index + 1).padStart(2, " ");
+        const nameToken = player.name.slice(0, nameWidth).padEnd(nameWidth, " ");
+        const roleToken = player.isBot ? "BOT" : "PLY";
+        const youToken = player.id === this.localPlayerId ? "YOU" : "   ";
+        const bountyToken = bountyTargetId && player.id === bountyTargetId ? "BNT" : "   ";
+        const scoreToken = String(Math.max(0, Math.round(player.score))).padStart(5, " ");
+        return `${rankToken} ${nameToken} ${roleToken} ${youToken} ${bountyToken} ${scoreToken}`;
+      });
 
-    hudScoreboardElement.textContent = ranking || "• Noch keine Punkte";
+    if (rankingRows.length === 0) {
+      hudScoreboardElement.textContent = "   Noch keine Punkte";
+      return;
+    }
+
+    const header = `RK ${"NAME".padEnd(nameWidth, " ")} TYP YOU BNT SCORE`;
+    const separator = "-".repeat(header.length);
+    hudScoreboardElement.textContent = [header, separator, ...rankingRows].join("\n");
   }
 
   private updateStatus(): void {

@@ -244,8 +244,6 @@ const arena: ArenaState = {
     { id: "pit-central", type: "pit", x: 1875, y: 1120, width: 300, height: 220 },
     { id: "pit-north-west", type: "pit", x: 760, y: 370, width: 250, height: 190 },
     { id: "pit-south-east", type: "pit", x: 3000, y: 1820, width: 260, height: 200 },
-    { id: "lava-west", type: "lava", x: 430, y: 1460, width: 320, height: 170 },
-    { id: "electric-east", type: "electric", x: 3370, y: 620, width: 300, height: 180 },
   ],
 };
 
