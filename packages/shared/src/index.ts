@@ -20,7 +20,7 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
-export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score";
+export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score" | "rocket";
 
 export interface ForceOrb {
   id: string;
@@ -57,6 +57,7 @@ export interface PlayerSnapshot {
   stealthMsLeft: number;
   stunnedMsLeft: number;
   shockCooldownMsLeft: number;
+  rocketAmmo: number;
   mass: number;
   score: number;
   isBot: boolean;
@@ -90,6 +91,7 @@ export interface GameSnapshot {
   leaderboard?: LeaderboardEntry[];
   bountyTargetId?: string | null;
   bountyBonus?: number;
+  specialBountyActive?: boolean;
   activeEvent?: ActiveMatchEventSnapshot;
   debug?: SnapshotDebugInfo;
 }
@@ -111,6 +113,7 @@ export interface PlayerInputPayload {
   left: boolean;
   right: boolean;
   ability: boolean;
+  rocketFire: boolean;
 }
 
 export interface DebugPingPayload {

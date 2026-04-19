@@ -258,8 +258,22 @@ class GameScene extends Phaser.Scene {
   private localPlayerId = "";
   private inputSeq = 0;
   private lastInputSentAt = 0;
-  private lastSentInput: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean } | null = null;
-  private pendingInput: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean } | null = null;
+  private lastSentInput: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+    rocketFire: boolean;
+  } | null = null;
+  private pendingInput: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+    rocketFire: boolean;
+  } | null = null;
   private hudCompact = false;
   private leaderboardLines = 8;
   private hudDirty = true;
@@ -290,6 +304,7 @@ class GameScene extends Phaser.Scene {
     left: Phaser.Input.Keyboard.Key;
     right: Phaser.Input.Keyboard.Key;
     ability: Phaser.Input.Keyboard.Key;
+    rocket: Phaser.Input.Keyboard.Key;
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
@@ -390,6 +405,7 @@ class GameScene extends Phaser.Scene {
       left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A, false),
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
       ability: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, false),
+      rocket: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R, false),
     };
     // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
     keyboard.disableGlobalCapture();
@@ -423,6 +439,9 @@ class GameScene extends Phaser.Scene {
       this.cycleQualityMode();
     });
     keyboard.on("keydown-SPACE", (event: KeyboardEvent) => {
+      event.preventDefault();
+    });
+    keyboard.on("keydown-R", (event: KeyboardEvent) => {
       event.preventDefault();
     });
     keyboard.on("keydown-F3", (event: KeyboardEvent) => {
@@ -468,6 +487,7 @@ class GameScene extends Phaser.Scene {
     this.scheduleInputSend({
       ...moveInput,
       ability: this.keys.ability.isDown,
+      rocketFire: this.keys.rocket.isDown,
     });
     this.flushPendingInput();
 
@@ -529,15 +549,30 @@ class GameScene extends Phaser.Scene {
   }
 
   private inputStatesEqual(
-    a: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean },
-    b: { up: boolean; down: boolean; left: boolean; right: boolean; ability: boolean },
+    a: {
+      up: boolean;
+      down: boolean;
+      left: boolean;
+      right: boolean;
+      ability: boolean;
+      rocketFire: boolean;
+    },
+    b: {
+      up: boolean;
+      down: boolean;
+      left: boolean;
+      right: boolean;
+      ability: boolean;
+      rocketFire: boolean;
+    },
   ): boolean {
     return (
       a.up === b.up &&
       a.down === b.down &&
       a.left === b.left &&
       a.right === b.right &&
-      a.ability === b.ability
+      a.ability === b.ability &&
+      a.rocketFire === b.rocketFire
     );
   }
 
@@ -547,6 +582,7 @@ class GameScene extends Phaser.Scene {
     left: boolean;
     right: boolean;
     ability: boolean;
+    rocketFire: boolean;
   }): void {
     if (this.lastSentInput && this.inputStatesEqual(input, this.lastSentInput)) {
       this.pendingInput = null;
@@ -573,6 +609,7 @@ class GameScene extends Phaser.Scene {
       left: this.pendingInput.left,
       right: this.pendingInput.right,
       ability: this.pendingInput.ability,
+      rocketFire: this.pendingInput.rocketFire,
     };
     socket.emit("input", payload);
     this.lastInputSentAt = this.time.now;
@@ -743,15 +780,32 @@ class GameScene extends Phaser.Scene {
 
     const previousBountyTargetId = previousSnapshot.bountyTargetId ?? null;
     const nextBountyTargetId = nextSnapshot.bountyTargetId ?? null;
+    const previousSpecialBounty = Boolean(previousSnapshot.specialBountyActive);
+    const nextSpecialBounty = Boolean(nextSnapshot.specialBountyActive);
     if (previousBountyTargetId !== nextBountyTargetId) {
       if (nextBountyTargetId) {
         const targetName =
           nextSnapshot.players.find((player) => player.id === nextBountyTargetId)?.name ?? "Unbekannt";
         const bonus = Math.max(0, Math.round(nextSnapshot.bountyBonus ?? 0));
-        this.enqueueAnnouncement("Neues Kopfgeld", `${targetName} | Bonus +${bonus} P`, "bounty");
+        const title = nextSpecialBounty ? "SPEZIAL-Kopfgeld" : "Neues Kopfgeld";
+        const detail = nextSpecialBounty
+          ? `${targetName} | Spezialbonus +${bonus} P (80% vom groessten Spieler)`
+          : `${targetName} | Bonus +${bonus} P`;
+        this.enqueueAnnouncement(title, detail, "bounty");
       } else if (previousBountyTargetId) {
         this.enqueueAnnouncement("Kopfgeld pausiert", "Zu wenig aktive Spieler.", "bounty");
       }
+    }
+
+    if (!previousSpecialBounty && nextSpecialBounty && previousBountyTargetId === nextBountyTargetId && nextBountyTargetId) {
+      const targetName =
+        nextSnapshot.players.find((player) => player.id === nextBountyTargetId)?.name ?? "Unbekannt";
+      const bonus = Math.max(0, Math.round(nextSnapshot.bountyBonus ?? 0));
+      this.enqueueAnnouncement(
+        "SPEZIAL-Kopfgeld aktiv",
+        `${targetName} | +${bonus} P (80% vom groessten Spieler)`,
+        "bounty",
+      );
     }
   }
 
@@ -890,6 +944,10 @@ class GameScene extends Phaser.Scene {
           ? payload.bountyTargetId
           : this.snapshot?.bountyTargetId,
       bountyBonus: payload.bountyBonus ?? this.snapshot?.bountyBonus,
+      specialBountyActive:
+        payload.specialBountyActive !== undefined
+          ? payload.specialBountyActive
+          : this.snapshot?.specialBountyActive,
       activeEvent: payload.activeEvent ?? this.snapshot?.activeEvent,
       debug: payload.debug ?? this.snapshot?.debug,
     };
@@ -1053,6 +1111,7 @@ class GameScene extends Phaser.Scene {
       shield: { core: 0x60a5fa, ring: 0x1d4ed8, alpha: 0.88 },
       stealth: { core: 0xc4b5fd, ring: 0x7c3aed, alpha: 0.86 },
       score: { core: 0xfb923c, ring: 0x9a3412, alpha: 0.9 },
+      rocket: { core: 0xf87171, ring: 0x991b1b, alpha: 0.94 },
     };
 
     const style = styleByKind[orb.kind] ?? styleByKind.mass;
@@ -1369,6 +1428,10 @@ class GameScene extends Phaser.Scene {
         local.shockCooldownMsLeft > 0
           ? ` | Blitz-CD: ${(local.shockCooldownMsLeft / 1000).toFixed(1)}s`
           : " | Blitz: SPACE bereit";
+      const rocketText =
+        local.rocketAmmo > 0
+          ? " | Rakete: R bereit"
+          : " | Rakete: keine";
       const effects = [
         this.formatEffectLabel("Speed", local.speedBoostMsLeft),
         this.formatEffectLabel("Unverwundbar", local.invulnerableMsLeft),
@@ -1378,7 +1441,7 @@ class GameScene extends Phaser.Scene {
       const localBountyText =
         bountyTargetId === local.id ? ` | Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P` : "";
       hudPlayerElement.textContent =
-        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${stunText}${effectText}${shockText}${localBountyText}`;
+        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${stunText}${effectText}${shockText}${rocketText}${localBountyText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
@@ -1394,11 +1457,8 @@ class GameScene extends Phaser.Scene {
       .map((player, index) => {
         const rankToken = String(index + 1).padStart(2, " ");
         const nameToken = player.name.slice(0, nameWidth).padEnd(nameWidth, " ");
-        const roleToken = player.isBot ? "BOT" : "PLY";
-        const youToken = player.id === this.localPlayerId ? "YOU" : "   ";
-        const bountyToken = bountyTargetId && player.id === bountyTargetId ? "BNT" : "   ";
         const scoreToken = String(Math.max(0, Math.round(player.score))).padStart(5, " ");
-        return `${rankToken} ${nameToken} ${roleToken} ${youToken} ${bountyToken} ${scoreToken}`;
+        return `${rankToken} ${nameToken} ${scoreToken}`;
       });
 
     if (rankingRows.length === 0) {
@@ -1406,7 +1466,7 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    const header = `RK ${"NAME".padEnd(nameWidth, " ")} TYP YOU BNT SCORE`;
+    const header = `RK ${"NAME".padEnd(nameWidth, " ")} PUNKTE`;
     const separator = "-".repeat(header.length);
     hudScoreboardElement.textContent = [header, separator, ...rankingRows].join("\n");
   }
@@ -1420,11 +1480,12 @@ class GameScene extends Phaser.Scene {
         : "";
     const bountyTargetId = this.snapshot?.bountyTargetId;
     const bountyBonus = Math.max(0, Math.round(this.snapshot?.bountyBonus ?? 0));
+    const specialBountyActive = Boolean(this.snapshot?.specialBountyActive);
     const bountyTarget = bountyTargetId
       ? this.snapshot?.players.find((player) => player.id === bountyTargetId)
       : undefined;
     const bountyText = bountyTarget
-      ? ` | Kopfgeld: ${bountyTarget.name.slice(0, 10)} (+${bountyBonus}P)`
+      ? ` | Kopfgeld${specialBountyActive ? " [SPEZIAL]" : ""}: ${bountyTarget.name.slice(0, 10)} (+${bountyBonus}P)`
       : "";
 
     if (socket.connected) {
