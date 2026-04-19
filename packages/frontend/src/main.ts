@@ -166,6 +166,7 @@ const SEMI_STATIC_DEADZONE_X_RATIO = 0.42;
 const SEMI_STATIC_DEADZONE_Y_RATIO = 0.36;
 const ANNOUNCEMENT_HOLD_MS = 4200;
 const ANNOUNCEMENT_FADE_MS = 260;
+const ROCKET_TRAIL_MS = 360;
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
@@ -246,12 +247,24 @@ class GameScene extends Phaser.Scene {
   private decorGraphics!: Phaser.GameObjects.Graphics;
   private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
+  private rocketTrailGraphics!: Phaser.GameObjects.Graphics;
+  private rocketPickupSprites = new Map<string, Phaser.GameObjects.Image>();
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
   private lastLabelText = new Map<string, string>();
   private snapshotPlayers = new Map<string, PlayerSnapshot>();
   private snapshotPickups = new Map<string, ForceOrb>();
+  private rocketTrails: Array<{
+    id: number;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    startedAt: number;
+    expiresAt: number;
+  }> = [];
+  private rocketTrailCounter = 1;
 
   private snapshot: GameSnapshot | null = null;
   private arena: ArenaState | null = null;
@@ -331,6 +344,7 @@ class GameScene extends Phaser.Scene {
       this.updateStatus();
       this.hudDirty = true;
       this.clearAnnouncementQueue();
+      this.clearRocketPickupSprites();
     };
     this.onConnectError = () => {
       this.updateStatus();
@@ -340,6 +354,12 @@ class GameScene extends Phaser.Scene {
       this.localPlayerId = payload.yourId;
       this.arena = payload.arena;
       this.clearAnnouncementQueue();
+      this.clearRocketPickupSprites();
+      this.rocketTrails = [];
+      this.rocketTrailCounter = 1;
+      if (this.rocketTrailGraphics) {
+        this.rocketTrailGraphics.clear();
+      }
       this.applyIncomingSnapshot(payload.snapshot);
       this.syncRenderPlayersFromSnapshot(true);
       this.lastSentInput = null;
@@ -363,6 +383,7 @@ class GameScene extends Phaser.Scene {
       }
       this.applyIncomingSnapshot(payload);
       this.detectSnapshotAnnouncements(previousSnapshot);
+      this.detectRocketShotVisuals(previousSnapshot);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
       const pickupChanged =
@@ -383,6 +404,10 @@ class GameScene extends Phaser.Scene {
     };
   }
 
+  preload(): void {
+    this.load.image("rocket-pickup-icon", "/rocket-pickup.svg");
+  }
+
   create(): void {
     this.cameras.main.setBackgroundColor(0x1e293b);
     this.cameras.main.roundPixels = false;
@@ -393,6 +418,8 @@ class GameScene extends Phaser.Scene {
     this.decorGraphics = this.add.graphics();
     this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
+    this.rocketTrailGraphics = this.add.graphics();
+    this.rocketTrailGraphics.setDepth(4);
     this.updateHudDensity();
 
     const keyboard = this.input.keyboard;
@@ -494,6 +521,7 @@ class GameScene extends Phaser.Scene {
     this.updateRenderPlayers();
     this.updateCamera();
     this.maybeRedrawPickups();
+    this.drawRocketTrails(now);
     this.drawPlayers();
   }
 
@@ -1085,12 +1113,15 @@ class GameScene extends Phaser.Scene {
 
   private drawPickups(): void {
     if (!this.snapshot) {
+      this.clearRocketPickupSprites();
       return;
     }
 
     const view = this.cameras.main.worldView;
     const margin = this.qualityProfile.pickupMargin;
     this.pickupGraphics.clear();
+    const visibleRocketOrbs: ForceOrb[] = [];
+
     for (const orb of this.snapshot.pickups) {
       if (
         orb.x < view.x - margin ||
@@ -1100,7 +1131,57 @@ class GameScene extends Phaser.Scene {
       ) {
         continue;
       }
+
+      if (orb.kind === "rocket") {
+        visibleRocketOrbs.push(orb);
+        continue;
+      }
+
       this.drawOrb(orb);
+    }
+
+    this.updateRocketPickupSprites(visibleRocketOrbs);
+  }
+
+  private clearRocketPickupSprites(): void {
+    for (const sprite of this.rocketPickupSprites.values()) {
+      sprite.destroy();
+    }
+    this.rocketPickupSprites.clear();
+  }
+
+  private updateRocketPickupSprites(visibleRocketOrbs: ForceOrb[]): void {
+    const visibleIds = new Set<string>();
+
+    for (const orb of visibleRocketOrbs) {
+      visibleIds.add(orb.id);
+
+      let sprite = this.rocketPickupSprites.get(orb.id);
+      if (!sprite) {
+        sprite = this.add.image(orb.x, orb.y, "rocket-pickup-icon");
+        sprite.setDepth(0);
+        this.children.moveBelow(sprite, this.playerGraphics);
+        this.rocketPickupSprites.set(orb.id, sprite);
+      }
+
+      const phase = this.time.now * 0.004 + orb.x * 0.011 + orb.y * 0.008;
+      const pulse = 0.92 + 0.08 * Math.sin(phase);
+      const targetSize = (orb.radius * 2 + 12) * pulse;
+      const scale = targetSize / 64;
+
+      sprite.setPosition(orb.x, orb.y);
+      sprite.setScale(scale);
+      sprite.setRotation(-Math.PI / 4 + Math.sin(phase * 0.75) * 0.08);
+      sprite.setAlpha(0.9 + 0.1 * Math.sin(phase + 0.8));
+      sprite.setVisible(true);
+    }
+
+    for (const [orbId, sprite] of this.rocketPickupSprites) {
+      if (visibleIds.has(orbId)) {
+        continue;
+      }
+      sprite.destroy();
+      this.rocketPickupSprites.delete(orbId);
     }
   }
 
@@ -1131,6 +1212,141 @@ class GameScene extends Phaser.Scene {
     if (detail === "high") {
       this.pickupGraphics.lineStyle(1, 0xffffff, 0.22);
       this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.4);
+    }
+  }
+
+  private detectRocketShotVisuals(previousSnapshot: GameSnapshot | null): void {
+    const nextSnapshot = this.snapshot;
+    if (!previousSnapshot || !nextSnapshot) {
+      return;
+    }
+
+    const previousById = new Map(previousSnapshot.players.map((player) => [player.id, player]));
+    for (const shooter of nextSnapshot.players) {
+      const previous = previousById.get(shooter.id);
+      if (!previous) {
+        continue;
+      }
+      if (!previous.alive || !shooter.alive) {
+        continue;
+      }
+      if (previous.rocketAmmo <= shooter.rocketAmmo) {
+        continue;
+      }
+
+      this.spawnRocketTrailForShooter(shooter, nextSnapshot.players);
+    }
+  }
+
+  private spawnRocketTrailForShooter(shooter: PlayerSnapshot, players: PlayerSnapshot[]): void {
+    const sourceRender = this.renderPlayers.get(shooter.id);
+    const fromX = sourceRender?.x ?? shooter.x;
+    const fromY = sourceRender?.y ?? shooter.y;
+
+    let targetX = Number.NaN;
+    let targetY = Number.NaN;
+    let bestDistSq = Number.POSITIVE_INFINITY;
+
+    for (const candidate of players) {
+      if (candidate.id === shooter.id || !candidate.alive) {
+        continue;
+      }
+
+      const targetRender = this.renderPlayers.get(candidate.id);
+      const cx = targetRender?.x ?? candidate.x;
+      const cy = targetRender?.y ?? candidate.y;
+      const dx = cx - fromX;
+      const dy = cy - fromY;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        targetX = cx;
+        targetY = cy;
+      }
+    }
+
+    if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || bestDistSq > 1_500 * 1_500) {
+      const speed = Math.hypot(shooter.vx, shooter.vy);
+      let dirX = 1;
+      let dirY = 0;
+      if (speed > 0.01) {
+        dirX = shooter.vx / speed;
+        dirY = shooter.vy / speed;
+      }
+
+      if (speed <= 0.01 && shooter.id === this.localPlayerId) {
+        const lookDx = this.pointerWorld.x - fromX;
+        const lookDy = this.pointerWorld.y - fromY;
+        const lookLen = Math.hypot(lookDx, lookDy);
+        if (lookLen > 0.01) {
+          dirX = lookDx / lookLen;
+          dirY = lookDy / lookLen;
+        }
+      }
+
+      targetX = fromX + dirX * 280;
+      targetY = fromY + dirY * 280;
+    }
+
+    if (this.arena) {
+      targetX = clamp(targetX, 8, this.arena.width - 8);
+      targetY = clamp(targetY, 8, this.arena.height - 8);
+    }
+
+    const now = this.time.now;
+    this.rocketTrails.push({
+      id: this.rocketTrailCounter++,
+      fromX,
+      fromY,
+      toX: targetX,
+      toY: targetY,
+      startedAt: now,
+      expiresAt: now + ROCKET_TRAIL_MS,
+    });
+
+    if (this.rocketTrails.length > 20) {
+      this.rocketTrails.splice(0, this.rocketTrails.length - 20);
+    }
+  }
+
+  private drawRocketTrails(now: number): void {
+    this.rocketTrails = this.rocketTrails.filter((trail) => trail.expiresAt > now);
+    this.rocketTrailGraphics.clear();
+
+    for (const trail of this.rocketTrails) {
+      const lifetime = Math.max(1, trail.expiresAt - trail.startedAt);
+      const progress = clamp((now - trail.startedAt) / lifetime, 0, 1);
+      const alpha = clamp(1 - progress, 0, 1);
+
+      const headT = clamp(progress * 1.26, 0, 1);
+      const tailT = clamp(headT - 0.34, 0, 1);
+
+      const headX = Phaser.Math.Linear(trail.fromX, trail.toX, headT);
+      const headY = Phaser.Math.Linear(trail.fromY, trail.toY, headT);
+      const tailX = Phaser.Math.Linear(trail.fromX, trail.toX, tailT);
+      const tailY = Phaser.Math.Linear(trail.fromY, trail.toY, tailT);
+
+      this.rocketTrailGraphics.lineStyle(9, 0xfb7185, 0.18 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+      this.rocketTrailGraphics.lineStyle(5, 0xf97316, 0.48 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+      this.rocketTrailGraphics.lineStyle(2, 0xfef08a, 0.88 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+
+      this.rocketTrailGraphics.fillStyle(0xfef08a, 0.9 * alpha);
+      this.rocketTrailGraphics.fillCircle(headX, headY, 2.8 + (1 - progress) * 2.4);
+      this.rocketTrailGraphics.fillStyle(0xfb923c, 0.55 * alpha);
+      this.rocketTrailGraphics.fillCircle(headX, headY, 4.5 + (1 - progress) * 1.8);
+
+      if (progress >= 0.68) {
+        const impact = clamp((progress - 0.68) / 0.32, 0, 1);
+        const pulse = 1 - impact;
+        const radius = 12 + impact * 22;
+        this.rocketTrailGraphics.lineStyle(2, 0xfca5a5, 0.42 * pulse);
+        this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, radius);
+        this.rocketTrailGraphics.fillStyle(0xfb923c, 0.22 * pulse);
+        this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 9 + impact * 12);
+      }
     }
   }
 
@@ -1513,6 +1729,11 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
+    this.clearRocketPickupSprites();
+    this.rocketTrails = [];
+    if (this.rocketTrailGraphics) {
+      this.rocketTrailGraphics.clear();
+    }
     this.clearAnnouncementQueue();
     this.debugEnabled = false;
     debugOverlayElement.style.display = "none";
