@@ -65,7 +65,6 @@ const ROCKET_PICKUP_RADIUS = 10;
 const SPECIAL_SPEED_DURATION_MS = 5000;
 const SPECIAL_SHIELD_DURATION_MS = 5500;
 const SPECIAL_STEALTH_DURATION_MS = 6500;
-const ROCKET_EDGE_RANGE = 920;
 const SHOCK_EDGE_RANGE = 195;
 const SHOCK_STUN_MS = 1700;
 const SHOCK_COOLDOWN_MS = 7200;
@@ -1246,13 +1245,6 @@ function tryShockNearestTarget(source: ServerPlayer, now: number): void {
   combatBoostUntil = Math.max(combatBoostUntil, now + 1800);
 }
 
-function isWithinRocketEdgeRange(source: ServerPlayer, target: ServerPlayer): boolean {
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
-  const centerRange = ROCKET_EDGE_RANGE + source.radius + target.radius;
-  return dx * dx + dy * dy <= centerRange * centerRange;
-}
-
 function canRocketTarget(source: ServerPlayer, target: ServerPlayer): boolean {
   if (source.id === target.id || !source.alive || !target.alive) {
     return false;
@@ -1266,25 +1258,22 @@ function tryFireRocketAtNearestTarget(source: ServerPlayer, now: number): void {
   }
 
   let bestTarget: ServerPlayer | undefined;
-  let bestEdgeDistance = Number.POSITIVE_INFINITY;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
 
   for (const candidate of players.values()) {
     if (!canRocketTarget(source, candidate)) {
       continue;
     }
 
-    if (!isWithinRocketEdgeRange(source, candidate)) {
-      continue;
-    }
-
-    const centerDistance = Math.hypot(candidate.x - source.x, candidate.y - source.y);
-    const edgeDistance = centerDistance - (source.radius + candidate.radius);
-    if (edgeDistance >= bestEdgeDistance) {
+    const dx = candidate.x - source.x;
+    const dy = candidate.y - source.y;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq >= bestDistanceSq) {
       continue;
     }
 
     bestTarget = candidate;
-    bestEdgeDistance = edgeDistance;
+    bestDistanceSq = distanceSq;
   }
 
   if (!bestTarget) {
@@ -1872,7 +1861,7 @@ function runAi(now: number): void {
     }
     const shouldUseShock = shockThreatInRange || (!currentlyRetreating && shockPreyInRange);
 
-    let rocketTargetInRange = false;
+    let rocketTargetAvailable = false;
     if (bot.rocketAmmo > 0 && bot.stunnedUntil <= now) {
       for (const candidate of list) {
         if (candidate.id === bot.id) {
@@ -1881,10 +1870,7 @@ function runAi(now: number): void {
         if (!canRocketTarget(bot, candidate)) {
           continue;
         }
-        if (!isWithinRocketEdgeRange(bot, candidate)) {
-          continue;
-        }
-        rocketTargetInRange = true;
+        rocketTargetAvailable = true;
         if (canConsumeTarget(candidate, bot, now)) {
           // Priorisiere defensive Raketen bei unmittelbarer Gefahr.
           break;
@@ -1899,7 +1885,7 @@ function runAi(now: number): void {
       left: move.x < -moveThreshold,
       right: move.x > moveThreshold,
       ability: shouldUseShock,
-      rocketFire: rocketTargetInRange,
+      rocketFire: rocketTargetAvailable,
     };
   }
 }

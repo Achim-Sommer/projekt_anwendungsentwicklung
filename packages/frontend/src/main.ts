@@ -1197,22 +1197,140 @@ class GameScene extends Phaser.Scene {
 
     const style = styleByKind[orb.kind] ?? styleByKind.mass;
     const detail = this.qualityProfile.pickupDetail;
+    const phase = this.time.now * 0.006 + orb.x * 0.013 + orb.y * 0.007;
+    const pulse = 0.92 + 0.08 * Math.sin(phase);
 
     if (detail === "low") {
       this.pickupGraphics.fillStyle(style.core, style.alpha * 0.9);
-      this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.3);
+      this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.35);
+      this.drawPickupGlyph(orb.kind, orb.x, orb.y, orb.radius * 0.76, detail);
       return;
     }
 
+    this.pickupGraphics.fillStyle(style.ring, 0.16);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4 + pulse * 0.8);
+
     this.pickupGraphics.fillStyle(style.core, style.alpha);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7 + pulse * 0.2);
     this.pickupGraphics.lineStyle(1, style.ring, 0.62);
     this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.2);
+
+    this.drawPickupGlyph(orb.kind, orb.x, orb.y, orb.radius * 0.9, detail);
 
     if (detail === "high") {
       this.pickupGraphics.lineStyle(1, 0xffffff, 0.22);
       this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.4);
+      this.pickupGraphics.fillStyle(0xffffff, 0.16);
+      this.pickupGraphics.fillCircle(orb.x - orb.radius * 0.28, orb.y - orb.radius * 0.32, 1.5);
     }
+  }
+
+  private drawPickupGlyph(
+    kind: PickupKind,
+    x: number,
+    y: number,
+    radius: number,
+    detail: "low" | "normal" | "high",
+  ): void {
+    if (kind === "speed") {
+      this.drawSpeedGlyph(x, y, radius, detail);
+      return;
+    }
+    if (kind === "shield") {
+      this.drawShieldGlyph(x, y, radius, detail);
+      return;
+    }
+    if (kind === "stealth") {
+      this.drawStealthGlyph(x, y, radius, detail);
+      return;
+    }
+    if (kind === "score") {
+      this.drawScoreGlyph(x, y, radius, detail);
+      return;
+    }
+    if (kind === "mass") {
+      this.drawMassGlyph(x, y, radius, detail);
+    }
+  }
+
+  private drawSpeedGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
+    const s = radius * 0.95;
+    const points = [
+      new Phaser.Geom.Point(x - s * 0.2, y - s),
+      new Phaser.Geom.Point(x + s * 0.12, y - s * 0.28),
+      new Phaser.Geom.Point(x - s * 0.05, y - s * 0.28),
+      new Phaser.Geom.Point(x + s * 0.2, y + s),
+      new Phaser.Geom.Point(x - s * 0.12, y + s * 0.26),
+      new Phaser.Geom.Point(x + s * 0.05, y + s * 0.26),
+    ];
+
+    this.pickupGraphics.fillStyle(0xf8fafc, detail === "low" ? 0.84 : 0.95);
+    this.pickupGraphics.fillPoints(points, true);
+    if (detail !== "low") {
+      this.pickupGraphics.lineStyle(1, 0x0f172a, 0.5);
+      this.pickupGraphics.strokePoints(points, true);
+    }
+  }
+
+  private drawShieldGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
+    const w = radius * 0.95;
+    const h = radius * 1.1;
+    const points = [
+      new Phaser.Geom.Point(x, y - h),
+      new Phaser.Geom.Point(x + w * 0.82, y - h * 0.38),
+      new Phaser.Geom.Point(x + w * 0.6, y + h * 0.5),
+      new Phaser.Geom.Point(x, y + h),
+      new Phaser.Geom.Point(x - w * 0.6, y + h * 0.5),
+      new Phaser.Geom.Point(x - w * 0.82, y - h * 0.38),
+    ];
+
+    this.pickupGraphics.fillStyle(0xe2e8f0, detail === "low" ? 0.82 : 0.94);
+    this.pickupGraphics.fillPoints(points, true);
+    this.pickupGraphics.lineStyle(1, 0x1e3a8a, 0.62);
+    this.pickupGraphics.strokePoints(points, true);
+
+    this.pickupGraphics.lineStyle(1, 0x60a5fa, 0.75);
+    this.pickupGraphics.lineBetween(x, y - h * 0.8, x, y + h * 0.78);
+  }
+
+  private drawStealthGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
+    const w = radius * 2.15;
+    const h = radius * 1.08;
+    this.pickupGraphics.fillStyle(0x0f172a, detail === "low" ? 0.2 : 0.28);
+    this.pickupGraphics.fillEllipse(x, y, w, h);
+    this.pickupGraphics.lineStyle(1.4, 0xf8fafc, 0.9);
+    this.pickupGraphics.strokeEllipse(x, y, w, h);
+    this.pickupGraphics.fillStyle(0xf8fafc, 0.9);
+    this.pickupGraphics.fillCircle(x, y, radius * 0.28);
+    this.pickupGraphics.lineStyle(1.5, 0x7c3aed, 0.78);
+    this.pickupGraphics.lineBetween(x - radius * 1.15, y + radius * 0.9, x + radius * 1.15, y - radius * 0.9);
+  }
+
+  private drawScoreGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
+    const outer = radius * 0.95;
+    this.pickupGraphics.fillStyle(0xfef3c7, detail === "low" ? 0.78 : 0.9);
+    this.pickupGraphics.fillCircle(x, y, outer);
+    this.pickupGraphics.lineStyle(1, 0xb45309, 0.72);
+    this.pickupGraphics.strokeCircle(x, y, outer);
+
+    const starOuter = radius * 0.48;
+    const starInner = radius * 0.22;
+    const starPoints: Phaser.Geom.Point[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      const angle = -Math.PI / 2 + (Math.PI * i) / 5;
+      const rr = i % 2 === 0 ? starOuter : starInner;
+      starPoints.push(new Phaser.Geom.Point(x + Math.cos(angle) * rr, y + Math.sin(angle) * rr));
+    }
+    this.pickupGraphics.fillStyle(0xf59e0b, 0.95);
+    this.pickupGraphics.fillPoints(starPoints, true);
+  }
+
+  private drawMassGlyph(x: number, y: number, radius: number, detail: "low" | "normal" | "high"): void {
+    const alpha = detail === "low" ? 0.62 : 0.78;
+    this.pickupGraphics.fillStyle(0xffffff, alpha);
+    this.pickupGraphics.fillCircle(x - radius * 0.42, y - radius * 0.2, radius * 0.22);
+    this.pickupGraphics.fillCircle(x + radius * 0.08, y - radius * 0.04, radius * 0.18);
+    this.pickupGraphics.fillCircle(x + radius * 0.36, y + radius * 0.18, radius * 0.14);
   }
 
   private detectRocketShotVisuals(previousSnapshot: GameSnapshot | null): void {
