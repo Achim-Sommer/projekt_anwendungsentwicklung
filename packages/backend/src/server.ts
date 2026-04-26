@@ -29,15 +29,14 @@ const DT = 1 / TICK_RATE;
 const FIXED_STEP_MS = 1000 / TICK_RATE;
 const SIM_LOOP_INTERVAL_MS = FIXED_STEP_MS;
 const MAX_SIM_STEPS_PER_FRAME = 4;
-const STREAM_PLAYER_RADIUS = 980;
 const STREAM_FULL_RESYNC_MS = 8000;
 
 const PLAYER_START_MASS = 10;
 const PLAYER_ACCELERATION_BASE = 2050;
 const PLAYER_MAX_SPEED_BASE = 450;
 const PLAYER_DRAG = 0.92;
-const SPEED_BOOST_MULTIPLIER = 1.36;
-const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.22;
+const SPEED_BOOST_MULTIPLIER = 1.45;
+const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.3;
 const RESPAWN_TIME_MS = 1800;
 const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
@@ -60,11 +59,11 @@ const SCORE_DROP_ORB_MAX = 28;
 const SCORE_DROP_SPREAD_RADIUS = 92;
 const SPECIAL_PICKUP_CHANCE = 0.07;
 const SPECIAL_PICKUP_RADIUS = 9;
-const ROCKET_PICKUP_CHANCE = 0.004;
+const ROCKET_PICKUP_CHANCE = 0.09;
 const ROCKET_PICKUP_RADIUS = 10;
 const SPECIAL_SPEED_DURATION_MS = 5000;
-const SPECIAL_SHIELD_DURATION_MS = 5500;
-const SPECIAL_STEALTH_DURATION_MS = 6500;
+const SPECIAL_SHIELD_DURATION_MS = 7000;
+const SPECIAL_STEALTH_DURATION_MS = 8500;
 const SHOCK_EDGE_RANGE = 195;
 const SHOCK_STUN_MS = 1700;
 const SHOCK_COOLDOWN_MS = 7200;
@@ -772,7 +771,6 @@ function pickupSignature(pickup: ForceOrb): string {
 }
 
 function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): PlayerSnapshot[] {
-  const radiusSq = STREAM_PLAYER_RADIUS * STREAM_PLAYER_RADIUS;
   const result: PlayerSnapshot[] = [];
 
   for (const candidate of players.values()) {
@@ -782,14 +780,6 @@ function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): Player
 
     if (candidate.id !== localPlayer.id && hasStealth(candidate, now)) {
       continue;
-    }
-
-    if (candidate.id !== localPlayer.id) {
-      const dx = candidate.x - localPlayer.x;
-      const dy = candidate.y - localPlayer.y;
-      if (dx * dx + dy * dy > radiusSq) {
-        continue;
-      }
     }
 
     result.push(toPlayerSnapshot(candidate, now));
