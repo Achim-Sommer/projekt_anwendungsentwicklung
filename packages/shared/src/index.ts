@@ -114,6 +114,8 @@ export interface PlayerInputPayload {
   right: boolean;
   ability: boolean;
   rocketFire: boolean;
+  aimX: number;
+  aimY: number;
 }
 
 export interface DebugPingPayload {
@@ -125,11 +127,22 @@ export interface DebugPongPayload {
   serverTime: number;
 }
 
+export interface RocketShotPayload {
+  shooterId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  hitPlayerId?: string;
+  serverTime: number;
+}
+
 export interface ServerToClientEvents {
   welcome: (payload: WelcomePayload) => void;
   snapshot: (payload: GameSnapshot) => void;
   playerLeft: (payload: PlayerLeftPayload) => void;
   debugPong: (payload: DebugPongPayload) => void;
+  rocketShot: (payload: RocketShotPayload) => void;
 }
 
 export interface ClientToServerEvents {
