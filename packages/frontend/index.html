@@ -53,8 +53,8 @@
       }
 
       .name-card {
-        width: min(92vw, 460px);
-        max-height: min(92vh, 520px);
+        width: min(96vw, 1180px);
+        max-height: min(92vh, 640px);
         background: linear-gradient(160deg, rgba(12, 29, 45, 0.95), rgba(14, 36, 58, 0.96));
         border: 1px solid rgba(56, 189, 248, 0.3);
         border-radius: 20px;
@@ -65,7 +65,21 @@
           0 0 0 1px rgba(34, 211, 238, 0.18) inset;
       }
 
-      .name-card h1 {
+      .name-layout {
+        display: grid;
+        grid-template-columns: minmax(230px, 1fr) minmax(320px, 1.12fr) minmax(230px, 1fr);
+        gap: 14px;
+        align-items: stretch;
+      }
+
+      .name-center {
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 14px;
+        padding: 14px;
+        background: linear-gradient(180deg, rgba(9, 24, 39, 0.8), rgba(8, 20, 34, 0.72));
+      }
+
+      .name-center h1 {
         font-size: clamp(20px, 4.3vw, 28px);
         color: var(--text-main);
         margin-bottom: 10px;
@@ -73,11 +87,74 @@
         text-transform: none;
       }
 
-      .name-card p {
+      .name-center p {
         color: var(--text-sub);
         font-size: clamp(12px, 2.3vw, 14px);
         margin-bottom: 16px;
         line-height: 1.4;
+      }
+
+      .name-helper {
+        margin-top: 10px;
+        margin-bottom: 0;
+        font-size: 12px;
+        color: #bfdbfe;
+      }
+
+      .guide-panel {
+        border-radius: 14px;
+        padding: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.34);
+        background: linear-gradient(180deg, rgba(8, 20, 33, 0.86), rgba(7, 16, 28, 0.8));
+      }
+
+      .events-panel {
+        border-color: rgba(245, 158, 11, 0.42);
+      }
+
+      .powerup-panel {
+        border-color: rgba(34, 197, 94, 0.44);
+      }
+
+      .guide-panel h2 {
+        color: #e2e8f0;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        margin-bottom: 10px;
+      }
+
+      .guide-panel ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .guide-panel li {
+        color: var(--text-sub);
+        font-size: 12px;
+        line-height: 1.34;
+        border-left: 2px solid rgba(148, 163, 184, 0.5);
+        padding-left: 10px;
+      }
+
+      .events-panel li {
+        border-left-color: rgba(245, 158, 11, 0.64);
+      }
+
+      .powerup-panel li {
+        border-left-color: rgba(34, 197, 94, 0.64);
+      }
+
+      .guide-panel li strong {
+        display: block;
+        color: #f8fafc;
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 2px;
       }
 
       #name-input {
@@ -206,19 +283,41 @@
         }
 
         .name-card {
-          width: min(96vw, 420px);
+          width: min(97vw, 860px);
           border-radius: 14px;
           padding: 16px;
         }
 
-        .name-card h1 {
+        .name-layout {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .name-center {
+          padding: 12px;
+        }
+
+        .name-center h1 {
           font-size: 22px;
           margin-bottom: 8px;
         }
 
-        .name-card p {
+        .name-center p {
           font-size: 13px;
           margin-bottom: 12px;
+        }
+
+        .guide-panel {
+          padding: 12px;
+        }
+
+        .guide-panel h2 {
+          font-size: 14px;
+          margin-bottom: 8px;
+        }
+
+        .guide-panel li {
+          font-size: 12px;
         }
 
         #name-input {
@@ -255,9 +354,23 @@
           padding: 12px;
         }
 
-        .name-card p {
+        .name-center {
+          padding: 10px;
+        }
+
+        .name-center p {
           margin-bottom: 10px;
           line-height: 1.3;
+        }
+
+        .guide-panel {
+          padding: 10px;
+        }
+
+        .guide-panel li {
+          font-size: 11.5px;
+          line-height: 1.28;
+          padding-left: 8px;
         }
 
         .name-actions {
@@ -271,19 +384,32 @@
 
       @media (min-width: 1500px) {
         .name-card {
-          width: min(44vw, 620px);
-          max-height: min(88vh, 640px);
+          width: min(90vw, 1380px);
+          max-height: min(88vh, 720px);
           padding: 30px;
         }
 
-        .name-card h1 {
+        .name-layout {
+          grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.16fr) minmax(280px, 1fr);
+          gap: 18px;
+        }
+
+        .name-center h1 {
           font-size: 36px;
           margin-bottom: 14px;
         }
 
-        .name-card p {
+        .name-center p {
           font-size: 17px;
           margin-bottom: 18px;
+        }
+
+        .guide-panel h2 {
+          font-size: 20px;
+        }
+
+        .guide-panel li {
+          font-size: 15px;
         }
 
         #name-input {
@@ -299,7 +425,11 @@
 
       @media (min-width: 2400px) {
         .name-card {
-          width: min(40vw, 720px);
+          width: min(84vw, 1680px);
+        }
+
+        .name-layout {
+          gap: 22px;
         }
       }
     </style>
@@ -316,20 +446,73 @@
 
     <div id="name-overlay">
       <div class="name-card">
-        <h1>Force Pit Arena</h1>
-        <p>Wachse durch Orbs, lade Kraft auf und stoße kleinere Spieler in den Abgrund.</p>
-        <input
-          id="name-input"
-          type="text"
-          maxlength="16"
-          placeholder="Dein Spielername"
-          autocomplete="nickname"
-          autofocus
-        />
-        <div class="name-actions">
-          <button id="start-button" type="button">In die Arena starten</button>
+        <div class="name-layout">
+          <aside class="guide-panel events-panel" aria-label="Event-Erklaerung">
+            <h2>Event-Erklaerung</h2>
+            <ul>
+              <li>
+                <strong>Kopfgeld-Event</strong>
+                Ein markierter Spieler bringt bei einem Kill zusaetzliche Punkte und Bonus-Masse.
+              </li>
+              <li>
+                <strong>Spezial-Kopfgeld</strong>
+                Seltenes Kopfgeld mit hoher Belohnung. Im HUD als [SPEZIAL] markiert.
+              </li>
+              <li>
+                <strong>ORB-SCHUB</strong>
+                Normale Mass-Orbs geben fuer kurze Zeit doppelte Masse.
+              </li>
+              <li>
+                <strong>HASTE / BOUNTY RUSH</strong>
+                HASTE macht alle schneller. BOUNTY RUSH erhoeht Kopfgeld-Punkte deutlich.
+              </li>
+            </ul>
+          </aside>
+
+          <section class="name-center">
+            <h1>Pit Arena Lobby</h1>
+            <p>Wachse durch Orbs, lade Kraft auf und stosse kleinere Spieler in den Abgrund.</p>
+            <input
+              id="name-input"
+              type="text"
+              maxlength="16"
+              placeholder="Dein Spielername"
+              autocomplete="nickname"
+              autofocus
+            />
+            <div class="name-actions">
+              <button id="start-button" type="button">In die Arena starten</button>
+            </div>
+            <div id="name-error"></div>
+            <p class="name-helper">Tipp: SPACE = Blitz, R = Rakete (wenn verfuegbar).</p>
+          </section>
+
+          <aside class="guide-panel powerup-panel" aria-label="Powerup-Erklaerung">
+            <h2>Powerup-Erklaerung</h2>
+            <ul>
+              <li>
+                <strong>Speed-Orb</strong>
+                Erhoeht dein Tempo fuer einige Sekunden und hilft beim Entkommen oder Chasen.
+              </li>
+              <li>
+                <strong>Shield-Orb</strong>
+                Macht dich kurz unverwundbar - ideal fuer riskante Pushes.
+              </li>
+              <li>
+                <strong>Stealth-Orb</strong>
+                Macht dich kurzfristig unsichtbar und erschwert gegnerisches Tracking.
+              </li>
+              <li>
+                <strong>Rocket-Orb</strong>
+                Gibt dir eine Rakete. Mit R ausloesen, um Druck aufzubauen.
+              </li>
+              <li>
+                <strong>Mass-Orb</strong>
+                Standard-Orb fuer Wachstum und konstante Punkte.
+              </li>
+            </ul>
+          </aside>
         </div>
-        <div id="name-error"></div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
