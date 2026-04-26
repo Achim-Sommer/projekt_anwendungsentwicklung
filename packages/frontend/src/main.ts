@@ -83,6 +83,36 @@ if (!(existingDebugOverlay instanceof HTMLPreElement)) {
   document.body.appendChild(debugOverlayElement);
 }
 
+const existingAnnouncementOverlay = document.getElementById("hud-announcement");
+const announcementOverlayElement =
+  existingAnnouncementOverlay instanceof HTMLDivElement
+    ? existingAnnouncementOverlay
+    : document.createElement("div");
+if (!(existingAnnouncementOverlay instanceof HTMLDivElement)) {
+  announcementOverlayElement.id = "hud-announcement";
+  announcementOverlayElement.style.position = "fixed";
+  announcementOverlayElement.style.left = "50%";
+  announcementOverlayElement.style.top = "12px";
+  announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+  announcementOverlayElement.style.maxWidth = "min(92vw, 560px)";
+  announcementOverlayElement.style.padding = "10px 14px";
+  announcementOverlayElement.style.borderRadius = "12px";
+  announcementOverlayElement.style.border = "1px solid rgba(56, 189, 248, 0.62)";
+  announcementOverlayElement.style.background = "rgba(8, 24, 40, 0.9)";
+  announcementOverlayElement.style.color = "#f8fafc";
+  announcementOverlayElement.style.font = "700 13px/1.4 'Trebuchet MS', 'Segoe UI', sans-serif";
+  announcementOverlayElement.style.letterSpacing = "0.01em";
+  announcementOverlayElement.style.textAlign = "center";
+  announcementOverlayElement.style.whiteSpace = "pre-line";
+  announcementOverlayElement.style.pointerEvents = "none";
+  announcementOverlayElement.style.zIndex = "26";
+  announcementOverlayElement.style.boxShadow = "0 10px 24px rgba(2, 10, 22, 0.42)";
+  announcementOverlayElement.style.transition = "opacity 180ms ease, transform 180ms ease";
+  announcementOverlayElement.style.display = "none";
+  announcementOverlayElement.style.opacity = "0";
+  document.body.appendChild(announcementOverlayElement);
+}
+
 type QualityMode = "low" | "normal" | "high";
 
 interface QualityProfile {
@@ -134,6 +164,29 @@ const STATIC_CAMERA_ZOOM = 0.86;
 const SEMI_STATIC_CAMERA_LERP = 0.035;
 const SEMI_STATIC_DEADZONE_X_RATIO = 0.42;
 const SEMI_STATIC_DEADZONE_Y_RATIO = 0.36;
+const ANNOUNCEMENT_HOLD_MS = 4200;
+const ANNOUNCEMENT_FADE_MS = 260;
+const ROCKET_TRAIL_MS = 360;
+
+type StyledPickupKind = "speed" | "shield" | "stealth" | "score";
+
+const STYLED_PICKUP_ICON_KEYS: Record<StyledPickupKind, string> = {
+  speed: "speed-pickup-icon",
+  shield: "shield-pickup-icon",
+  stealth: "stealth-pickup-icon",
+  score: "score-pickup-icon",
+};
+
+const STYLED_PICKUP_PHASE_OFFSETS: Record<StyledPickupKind, number> = {
+  speed: 0,
+  shield: 1.1,
+  stealth: 2.2,
+  score: 3.1,
+};
+
+function isStyledPickupKind(kind: PickupKind): kind is StyledPickupKind {
+  return kind === "speed" || kind === "shield" || kind === "stealth" || kind === "score";
+}
 
 function loadQualityMode(): QualityMode {
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
@@ -214,20 +267,47 @@ class GameScene extends Phaser.Scene {
   private decorGraphics!: Phaser.GameObjects.Graphics;
   private pickupGraphics!: Phaser.GameObjects.Graphics;
   private playerGraphics!: Phaser.GameObjects.Graphics;
+  private rocketTrailGraphics!: Phaser.GameObjects.Graphics;
+  private rocketPickupSprites = new Map<string, Phaser.GameObjects.Image>();
+  private styledPickupSprites = new Map<string, Phaser.GameObjects.Image>();
   private nameLabels = new Map<string, Phaser.GameObjects.Text>();
   private hazardLabels: Phaser.GameObjects.Text[] = [];
   private renderPlayers = new Map<string, { x: number; y: number; vx: number; vy: number }>();
   private lastLabelText = new Map<string, string>();
   private snapshotPlayers = new Map<string, PlayerSnapshot>();
   private snapshotPickups = new Map<string, ForceOrb>();
+  private rocketTrails: Array<{
+    id: number;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    startedAt: number;
+    expiresAt: number;
+  }> = [];
+  private rocketTrailCounter = 1;
 
   private snapshot: GameSnapshot | null = null;
   private arena: ArenaState | null = null;
   private localPlayerId = "";
   private inputSeq = 0;
   private lastInputSentAt = 0;
-  private lastSentInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
-  private pendingInput: { up: boolean; down: boolean; left: boolean; right: boolean } | null = null;
+  private lastSentInput: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+    rocketFire: boolean;
+  } | null = null;
+  private pendingInput: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+    rocketFire: boolean;
+  } | null = null;
   private hudCompact = false;
   private leaderboardLines = 8;
   private hudDirty = true;
@@ -243,12 +323,22 @@ class GameScene extends Phaser.Scene {
   private latestRttMs: number | null = null;
   private lastPingSentAt = 0;
   private latestServerDebug: SnapshotDebugInfo | null = null;
+  private announcementQueue: Array<{
+    title: string;
+    detail: string;
+    tone: "event" | "bounty";
+  }> = [];
+  private announcementActive = false;
+  private announcementHoldTimerId: number | null = null;
+  private announcementFadeTimerId: number | null = null;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
     left: Phaser.Input.Keyboard.Key;
     right: Phaser.Input.Keyboard.Key;
+    ability: Phaser.Input.Keyboard.Key;
+    rocket: Phaser.Input.Keyboard.Key;
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
@@ -274,6 +364,9 @@ class GameScene extends Phaser.Scene {
     this.onDisconnect = () => {
       this.updateStatus();
       this.hudDirty = true;
+      this.clearAnnouncementQueue();
+      this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
     };
     this.onConnectError = () => {
       this.updateStatus();
@@ -282,6 +375,14 @@ class GameScene extends Phaser.Scene {
     this.onWelcome = (payload) => {
       this.localPlayerId = payload.yourId;
       this.arena = payload.arena;
+      this.clearAnnouncementQueue();
+      this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
+      this.rocketTrails = [];
+      this.rocketTrailCounter = 1;
+      if (this.rocketTrailGraphics) {
+        this.rocketTrailGraphics.clear();
+      }
       this.applyIncomingSnapshot(payload.snapshot);
       this.syncRenderPlayersFromSnapshot(true);
       this.lastSentInput = null;
@@ -298,11 +399,14 @@ class GameScene extends Phaser.Scene {
       this.maybeUpdateDebugOverlay(true);
     };
     this.onSnapshot = (payload) => {
+      const previousSnapshot = this.snapshot;
       this.latestServerDebug = payload.debug ?? this.latestServerDebug;
       if (this.debugEnabled) {
         this.latestSnapshotBytes = this.estimateSnapshotBytes(payload);
       }
       this.applyIncomingSnapshot(payload);
+      this.detectSnapshotAnnouncements(previousSnapshot);
+      this.detectRocketShotVisuals(previousSnapshot);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
       const pickupChanged =
@@ -323,6 +427,14 @@ class GameScene extends Phaser.Scene {
     };
   }
 
+  preload(): void {
+    this.load.image("rocket-pickup-icon", "/rocket-pickup.svg");
+    this.load.image("speed-pickup-icon", "/speed-pickup.svg");
+    this.load.image("shield-pickup-icon", "/shield-pickup.svg");
+    this.load.image("stealth-pickup-icon", "/stealth-pickup.svg");
+    this.load.image("score-pickup-icon", "/score-pickup.svg");
+  }
+
   create(): void {
     this.cameras.main.setBackgroundColor(0x1e293b);
     this.cameras.main.roundPixels = false;
@@ -333,6 +445,8 @@ class GameScene extends Phaser.Scene {
     this.decorGraphics = this.add.graphics();
     this.pickupGraphics = this.add.graphics();
     this.playerGraphics = this.add.graphics();
+    this.rocketTrailGraphics = this.add.graphics();
+    this.rocketTrailGraphics.setDepth(4);
     this.updateHudDensity();
 
     const keyboard = this.input.keyboard;
@@ -344,6 +458,8 @@ class GameScene extends Phaser.Scene {
       down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S, false),
       left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A, false),
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
+      ability: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, false),
+      rocket: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R, false),
     };
     // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
     keyboard.disableGlobalCapture();
@@ -375,6 +491,12 @@ class GameScene extends Phaser.Scene {
     keyboard.on("keydown-F8", (event: KeyboardEvent) => {
       event.preventDefault();
       this.cycleQualityMode();
+    });
+    keyboard.on("keydown-SPACE", (event: KeyboardEvent) => {
+      event.preventDefault();
+    });
+    keyboard.on("keydown-R", (event: KeyboardEvent) => {
+      event.preventDefault();
     });
     keyboard.on("keydown-F3", (event: KeyboardEvent) => {
       event.preventDefault();
@@ -416,12 +538,17 @@ class GameScene extends Phaser.Scene {
     }
 
     const moveInput = this.getMovementInput(player);
-    this.scheduleInputSend(moveInput);
+    this.scheduleInputSend({
+      ...moveInput,
+      ability: this.keys.ability.isDown,
+      rocketFire: this.keys.rocket.isDown,
+    });
     this.flushPendingInput();
 
     this.updateRenderPlayers();
     this.updateCamera();
     this.maybeRedrawPickups();
+    this.drawRocketTrails(now);
     this.drawPlayers();
   }
 
@@ -477,13 +604,41 @@ class GameScene extends Phaser.Scene {
   }
 
   private inputStatesEqual(
-    a: { up: boolean; down: boolean; left: boolean; right: boolean },
-    b: { up: boolean; down: boolean; left: boolean; right: boolean },
+    a: {
+      up: boolean;
+      down: boolean;
+      left: boolean;
+      right: boolean;
+      ability: boolean;
+      rocketFire: boolean;
+    },
+    b: {
+      up: boolean;
+      down: boolean;
+      left: boolean;
+      right: boolean;
+      ability: boolean;
+      rocketFire: boolean;
+    },
   ): boolean {
-    return a.up === b.up && a.down === b.down && a.left === b.left && a.right === b.right;
+    return (
+      a.up === b.up &&
+      a.down === b.down &&
+      a.left === b.left &&
+      a.right === b.right &&
+      a.ability === b.ability &&
+      a.rocketFire === b.rocketFire
+    );
   }
 
-  private scheduleInputSend(input: { up: boolean; down: boolean; left: boolean; right: boolean }): void {
+  private scheduleInputSend(input: {
+    up: boolean;
+    down: boolean;
+    left: boolean;
+    right: boolean;
+    ability: boolean;
+    rocketFire: boolean;
+  }): void {
     if (this.lastSentInput && this.inputStatesEqual(input, this.lastSentInput)) {
       this.pendingInput = null;
       return;
@@ -508,6 +663,8 @@ class GameScene extends Phaser.Scene {
       down: this.pendingInput.down,
       left: this.pendingInput.left,
       right: this.pendingInput.right,
+      ability: this.pendingInput.ability,
+      rocketFire: this.pendingInput.rocketFire,
     };
     socket.emit("input", payload);
     this.lastInputSentAt = this.time.now;
@@ -598,6 +755,113 @@ class GameScene extends Phaser.Scene {
     ].join("\n");
 
     this.lastDebugUpdateAt = now;
+  }
+
+  private enqueueAnnouncement(title: string, detail: string, tone: "event" | "bounty"): void {
+    this.announcementQueue.push({ title, detail, tone });
+    this.processAnnouncementQueue();
+  }
+
+  private processAnnouncementQueue(): void {
+    if (this.announcementActive) {
+      return;
+    }
+
+    const next = this.announcementQueue.shift();
+    if (!next) {
+      return;
+    }
+
+    this.announcementActive = true;
+    const isEvent = next.tone === "event";
+    announcementOverlayElement.style.borderColor = isEvent
+      ? "rgba(56, 189, 248, 0.72)"
+      : "rgba(245, 158, 11, 0.8)";
+    announcementOverlayElement.style.background = isEvent
+      ? "rgba(8, 24, 40, 0.9)"
+      : "rgba(44, 25, 6, 0.9)";
+    announcementOverlayElement.style.color = isEvent ? "#dbeafe" : "#fef3c7";
+    announcementOverlayElement.textContent = next.detail.length > 0
+      ? `${next.title}\n${next.detail}`
+      : next.title;
+    announcementOverlayElement.style.display = "block";
+
+    requestAnimationFrame(() => {
+      announcementOverlayElement.style.opacity = "1";
+      announcementOverlayElement.style.transform = "translate(-50%, 0)";
+    });
+
+    this.announcementHoldTimerId = window.setTimeout(() => {
+      this.announcementHoldTimerId = null;
+      announcementOverlayElement.style.opacity = "0";
+      announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+      this.announcementFadeTimerId = window.setTimeout(() => {
+        this.announcementFadeTimerId = null;
+        announcementOverlayElement.style.display = "none";
+        this.announcementActive = false;
+        this.processAnnouncementQueue();
+      }, ANNOUNCEMENT_FADE_MS);
+    }, ANNOUNCEMENT_HOLD_MS);
+  }
+
+  private clearAnnouncementQueue(): void {
+    this.announcementQueue = [];
+    this.announcementActive = false;
+    if (this.announcementHoldTimerId != null) {
+      window.clearTimeout(this.announcementHoldTimerId);
+      this.announcementHoldTimerId = null;
+    }
+    if (this.announcementFadeTimerId != null) {
+      window.clearTimeout(this.announcementFadeTimerId);
+      this.announcementFadeTimerId = null;
+    }
+    announcementOverlayElement.style.display = "none";
+    announcementOverlayElement.style.opacity = "0";
+    announcementOverlayElement.style.transform = "translate(-50%, -8px)";
+  }
+
+  private detectSnapshotAnnouncements(previousSnapshot: GameSnapshot | null): void {
+    const nextSnapshot = this.snapshot;
+    if (!previousSnapshot || !nextSnapshot) {
+      return;
+    }
+
+    const previousEventKind = previousSnapshot.activeEvent?.kind ?? "none";
+    const nextEvent = nextSnapshot.activeEvent;
+    const nextEventKind = nextEvent?.kind ?? "none";
+    if (previousEventKind !== nextEventKind && nextEvent && nextEvent.kind !== "none") {
+      this.enqueueAnnouncement(`Event gestartet: ${nextEvent.title}`, nextEvent.description, "event");
+    }
+
+    const previousBountyTargetId = previousSnapshot.bountyTargetId ?? null;
+    const nextBountyTargetId = nextSnapshot.bountyTargetId ?? null;
+    const previousSpecialBounty = Boolean(previousSnapshot.specialBountyActive);
+    const nextSpecialBounty = Boolean(nextSnapshot.specialBountyActive);
+    if (previousBountyTargetId !== nextBountyTargetId) {
+      if (nextBountyTargetId) {
+        const targetName =
+          nextSnapshot.players.find((player) => player.id === nextBountyTargetId)?.name ?? "Unbekannt";
+        const bonus = Math.max(0, Math.round(nextSnapshot.bountyBonus ?? 0));
+        const title = nextSpecialBounty ? "SPEZIAL-Kopfgeld" : "Neues Kopfgeld";
+        const detail = nextSpecialBounty
+          ? `${targetName} | Spezialbonus +${bonus} P (80% vom groessten Spieler)`
+          : `${targetName} | Bonus +${bonus} P`;
+        this.enqueueAnnouncement(title, detail, "bounty");
+      } else if (previousBountyTargetId) {
+        this.enqueueAnnouncement("Kopfgeld pausiert", "Zu wenig aktive Spieler.", "bounty");
+      }
+    }
+
+    if (!previousSpecialBounty && nextSpecialBounty && previousBountyTargetId === nextBountyTargetId && nextBountyTargetId) {
+      const targetName =
+        nextSnapshot.players.find((player) => player.id === nextBountyTargetId)?.name ?? "Unbekannt";
+      const bonus = Math.max(0, Math.round(nextSnapshot.bountyBonus ?? 0));
+      this.enqueueAnnouncement(
+        "SPEZIAL-Kopfgeld aktiv",
+        `${targetName} | +${bonus} P (80% vom groessten Spieler)`,
+        "bounty",
+      );
+    }
   }
 
   private clampCameraCenterToArena(centerX: number, centerY: number): { x: number; y: number } {
@@ -730,6 +994,16 @@ class GameScene extends Phaser.Scene {
       players: Array.from(this.snapshotPlayers.values()),
       pickups: Array.from(this.snapshotPickups.values()),
       leaderboard: payload.leaderboard ?? this.snapshot?.leaderboard,
+      bountyTargetId:
+        payload.bountyTargetId !== undefined
+          ? payload.bountyTargetId
+          : this.snapshot?.bountyTargetId,
+      bountyBonus: payload.bountyBonus ?? this.snapshot?.bountyBonus,
+      specialBountyActive:
+        payload.specialBountyActive !== undefined
+          ? payload.specialBountyActive
+          : this.snapshot?.specialBountyActive,
+      activeEvent: payload.activeEvent ?? this.snapshot?.activeEvent,
       debug: payload.debug ?? this.snapshot?.debug,
     };
   }
@@ -866,12 +1140,17 @@ class GameScene extends Phaser.Scene {
 
   private drawPickups(): void {
     if (!this.snapshot) {
+      this.clearRocketPickupSprites();
+      this.clearStyledPickupSprites();
       return;
     }
 
     const view = this.cameras.main.worldView;
     const margin = this.qualityProfile.pickupMargin;
     this.pickupGraphics.clear();
+    const visibleRocketOrbs: ForceOrb[] = [];
+    const visibleStyledOrbs: ForceOrb[] = [];
+
     for (const orb of this.snapshot.pickups) {
       if (
         orb.x < view.x - margin ||
@@ -881,35 +1160,293 @@ class GameScene extends Phaser.Scene {
       ) {
         continue;
       }
+
+      if (orb.kind === "rocket") {
+        visibleRocketOrbs.push(orb);
+        continue;
+      }
+
+      if (isStyledPickupKind(orb.kind)) {
+        visibleStyledOrbs.push(orb);
+        continue;
+      }
+
       this.drawOrb(orb);
+    }
+
+    this.updateRocketPickupSprites(visibleRocketOrbs);
+    this.updateStyledPickupSprites(visibleStyledOrbs);
+  }
+
+  private clearRocketPickupSprites(): void {
+    for (const sprite of this.rocketPickupSprites.values()) {
+      sprite.destroy();
+    }
+    this.rocketPickupSprites.clear();
+  }
+
+  private clearStyledPickupSprites(): void {
+    for (const sprite of this.styledPickupSprites.values()) {
+      sprite.destroy();
+    }
+    this.styledPickupSprites.clear();
+  }
+
+  private updateRocketPickupSprites(visibleRocketOrbs: ForceOrb[]): void {
+    const visibleIds = new Set<string>();
+
+    for (const orb of visibleRocketOrbs) {
+      visibleIds.add(orb.id);
+
+      let sprite = this.rocketPickupSprites.get(orb.id);
+      if (!sprite) {
+        sprite = this.add.image(orb.x, orb.y, "rocket-pickup-icon");
+        sprite.setDepth(0);
+        this.children.moveBelow(sprite, this.playerGraphics);
+        this.rocketPickupSprites.set(orb.id, sprite);
+      }
+
+      const phase = this.time.now * 0.004 + orb.x * 0.011 + orb.y * 0.008;
+      const pulse = 0.92 + 0.08 * Math.sin(phase);
+      const targetSize = (orb.radius * 2 + 12) * pulse;
+      const scale = targetSize / 64;
+
+      sprite.setPosition(orb.x, orb.y);
+      sprite.setScale(scale);
+      sprite.setRotation(-Math.PI / 4 + Math.sin(phase * 0.75) * 0.08);
+      sprite.setAlpha(0.9 + 0.1 * Math.sin(phase + 0.8));
+      sprite.setVisible(true);
+    }
+
+    for (const [orbId, sprite] of this.rocketPickupSprites) {
+      if (visibleIds.has(orbId)) {
+        continue;
+      }
+      sprite.destroy();
+      this.rocketPickupSprites.delete(orbId);
+    }
+  }
+
+  private updateStyledPickupSprites(visibleStyledOrbs: ForceOrb[]): void {
+    const visibleIds = new Set<string>();
+
+    for (const orb of visibleStyledOrbs) {
+      if (!isStyledPickupKind(orb.kind)) {
+        continue;
+      }
+
+      visibleIds.add(orb.id);
+      const textureKey = STYLED_PICKUP_ICON_KEYS[orb.kind];
+
+      let sprite = this.styledPickupSprites.get(orb.id);
+      if (!sprite) {
+        sprite = this.add.image(orb.x, orb.y, textureKey);
+        sprite.setDepth(0);
+        this.children.moveBelow(sprite, this.playerGraphics);
+        this.styledPickupSprites.set(orb.id, sprite);
+      }
+
+      if (sprite.texture.key !== textureKey) {
+        sprite.setTexture(textureKey);
+      }
+
+      const phaseOffset = STYLED_PICKUP_PHASE_OFFSETS[orb.kind];
+      const phase = this.time.now * 0.0048 + orb.x * 0.01 + orb.y * 0.006 + phaseOffset;
+      const pulse = 0.92 + 0.1 * Math.sin(phase);
+      const targetSize = (orb.radius * 2 + 11) * pulse;
+      const scale = targetSize / 64;
+
+      let rotation = Math.sin(phase * 0.9) * 0.04;
+      if (orb.kind === "speed") {
+        rotation = -0.12 + Math.sin(phase * 1.35) * 0.18;
+      } else if (orb.kind === "score") {
+        rotation = (this.time.now * 0.0012 + phaseOffset) % (Math.PI * 2);
+      } else if (orb.kind === "stealth") {
+        rotation = Math.sin(phase * 0.7) * 0.08;
+      }
+
+      let alpha = 0.9 + 0.1 * Math.sin(phase + 0.6);
+      if (orb.kind === "stealth") {
+        alpha = 0.76 + 0.16 * (0.5 + 0.5 * Math.sin(phase * 1.2));
+      }
+
+      sprite.setPosition(orb.x, orb.y);
+      sprite.setScale(scale);
+      sprite.setRotation(rotation);
+      sprite.setAlpha(alpha);
+      sprite.setVisible(true);
+    }
+
+    for (const [orbId, sprite] of this.styledPickupSprites) {
+      if (visibleIds.has(orbId)) {
+        continue;
+      }
+      sprite.destroy();
+      this.styledPickupSprites.delete(orbId);
     }
   }
 
   private drawOrb(orb: ForceOrb): void {
-    const styleByKind: Record<PickupKind, { core: number; ring: number; alpha: number }> = {
-      mass: { core: 0xfde047, ring: 0x84cc16, alpha: 0.9 },
-      speed: { core: 0x22d3ee, ring: 0x0369a1, alpha: 0.88 },
-      shield: { core: 0x60a5fa, ring: 0x1d4ed8, alpha: 0.88 },
-      stealth: { core: 0xc4b5fd, ring: 0x7c3aed, alpha: 0.86 },
-    };
-
-    const style = styleByKind[orb.kind] ?? styleByKind.mass;
     const detail = this.qualityProfile.pickupDetail;
+    const phase = this.time.now * 0.0058 + orb.x * 0.013 + orb.y * 0.007;
+    const pulse = 0.92 + 0.08 * Math.sin(phase);
 
     if (detail === "low") {
-      this.pickupGraphics.fillStyle(style.core, style.alpha * 0.9);
-      this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.3);
+      this.pickupGraphics.fillStyle(0xfde047, 0.88);
+      this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.35);
+      this.pickupGraphics.fillStyle(0xffffff, 0.5);
+      this.pickupGraphics.fillCircle(orb.x - orb.radius * 0.26, orb.y - orb.radius * 0.24, 1.1);
       return;
     }
 
-    this.pickupGraphics.fillStyle(style.core, style.alpha);
-    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7);
-    this.pickupGraphics.lineStyle(1, style.ring, 0.62);
+    this.pickupGraphics.fillStyle(0x84cc16, 0.16);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4 + pulse * 0.8);
+
+    this.pickupGraphics.fillStyle(0xfde047, 0.9);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7 + pulse * 0.2);
+    this.pickupGraphics.lineStyle(1, 0x84cc16, 0.62);
     this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.2);
 
     if (detail === "high") {
       this.pickupGraphics.lineStyle(1, 0xffffff, 0.22);
       this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.4);
+      this.pickupGraphics.fillStyle(0xffffff, 0.16);
+      this.pickupGraphics.fillCircle(orb.x - orb.radius * 0.28, orb.y - orb.radius * 0.32, 1.5);
+    }
+  }
+
+  private detectRocketShotVisuals(previousSnapshot: GameSnapshot | null): void {
+    const nextSnapshot = this.snapshot;
+    if (!previousSnapshot || !nextSnapshot) {
+      return;
+    }
+
+    const previousById = new Map(previousSnapshot.players.map((player) => [player.id, player]));
+    for (const shooter of nextSnapshot.players) {
+      const previous = previousById.get(shooter.id);
+      if (!previous) {
+        continue;
+      }
+      if (!previous.alive || !shooter.alive) {
+        continue;
+      }
+      if (previous.rocketAmmo <= shooter.rocketAmmo) {
+        continue;
+      }
+
+      this.spawnRocketTrailForShooter(shooter, nextSnapshot.players);
+    }
+  }
+
+  private spawnRocketTrailForShooter(shooter: PlayerSnapshot, players: PlayerSnapshot[]): void {
+    const sourceRender = this.renderPlayers.get(shooter.id);
+    const fromX = sourceRender?.x ?? shooter.x;
+    const fromY = sourceRender?.y ?? shooter.y;
+
+    let targetX = Number.NaN;
+    let targetY = Number.NaN;
+    let bestDistSq = Number.POSITIVE_INFINITY;
+
+    for (const candidate of players) {
+      if (candidate.id === shooter.id || !candidate.alive) {
+        continue;
+      }
+
+      const targetRender = this.renderPlayers.get(candidate.id);
+      const cx = targetRender?.x ?? candidate.x;
+      const cy = targetRender?.y ?? candidate.y;
+      const dx = cx - fromX;
+      const dy = cy - fromY;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        targetX = cx;
+        targetY = cy;
+      }
+    }
+
+    if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || bestDistSq > 1_500 * 1_500) {
+      const speed = Math.hypot(shooter.vx, shooter.vy);
+      let dirX = 1;
+      let dirY = 0;
+      if (speed > 0.01) {
+        dirX = shooter.vx / speed;
+        dirY = shooter.vy / speed;
+      }
+
+      if (speed <= 0.01 && shooter.id === this.localPlayerId) {
+        const lookDx = this.pointerWorld.x - fromX;
+        const lookDy = this.pointerWorld.y - fromY;
+        const lookLen = Math.hypot(lookDx, lookDy);
+        if (lookLen > 0.01) {
+          dirX = lookDx / lookLen;
+          dirY = lookDy / lookLen;
+        }
+      }
+
+      targetX = fromX + dirX * 280;
+      targetY = fromY + dirY * 280;
+    }
+
+    if (this.arena) {
+      targetX = clamp(targetX, 8, this.arena.width - 8);
+      targetY = clamp(targetY, 8, this.arena.height - 8);
+    }
+
+    const now = this.time.now;
+    this.rocketTrails.push({
+      id: this.rocketTrailCounter++,
+      fromX,
+      fromY,
+      toX: targetX,
+      toY: targetY,
+      startedAt: now,
+      expiresAt: now + ROCKET_TRAIL_MS,
+    });
+
+    if (this.rocketTrails.length > 20) {
+      this.rocketTrails.splice(0, this.rocketTrails.length - 20);
+    }
+  }
+
+  private drawRocketTrails(now: number): void {
+    this.rocketTrails = this.rocketTrails.filter((trail) => trail.expiresAt > now);
+    this.rocketTrailGraphics.clear();
+
+    for (const trail of this.rocketTrails) {
+      const lifetime = Math.max(1, trail.expiresAt - trail.startedAt);
+      const progress = clamp((now - trail.startedAt) / lifetime, 0, 1);
+      const alpha = clamp(1 - progress, 0, 1);
+
+      const headT = clamp(progress * 1.26, 0, 1);
+      const tailT = clamp(headT - 0.34, 0, 1);
+
+      const headX = Phaser.Math.Linear(trail.fromX, trail.toX, headT);
+      const headY = Phaser.Math.Linear(trail.fromY, trail.toY, headT);
+      const tailX = Phaser.Math.Linear(trail.fromX, trail.toX, tailT);
+      const tailY = Phaser.Math.Linear(trail.fromY, trail.toY, tailT);
+
+      this.rocketTrailGraphics.lineStyle(9, 0xfb7185, 0.18 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+      this.rocketTrailGraphics.lineStyle(5, 0xf97316, 0.48 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+      this.rocketTrailGraphics.lineStyle(2, 0xfef08a, 0.88 * alpha);
+      this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
+
+      this.rocketTrailGraphics.fillStyle(0xfef08a, 0.9 * alpha);
+      this.rocketTrailGraphics.fillCircle(headX, headY, 2.8 + (1 - progress) * 2.4);
+      this.rocketTrailGraphics.fillStyle(0xfb923c, 0.55 * alpha);
+      this.rocketTrailGraphics.fillCircle(headX, headY, 4.5 + (1 - progress) * 1.8);
+
+      if (progress >= 0.68) {
+        const impact = clamp((progress - 0.68) / 0.32, 0, 1);
+        const pulse = 1 - impact;
+        const radius = 12 + impact * 22;
+        this.rocketTrailGraphics.lineStyle(2, 0xfca5a5, 0.42 * pulse);
+        this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, radius);
+        this.rocketTrailGraphics.fillStyle(0xfb923c, 0.22 * pulse);
+        this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 9 + impact * 12);
+      }
     }
   }
 
@@ -959,6 +1496,68 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (hazard.type === "pit") {
+      const centerX = hazard.x + hazard.width / 2;
+      const centerY = hazard.y + hazard.height / 2;
+
+      this.hazardGraphics.fillStyle(0x03060f, 0.36);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 1.08, hazard.height * 0.86);
+
+      this.hazardGraphics.fillStyle(0x060b16, 0.96);
+      this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 13);
+      this.hazardGraphics.fillStyle(0x111c30, 0.84);
+      this.hazardGraphics.fillRoundedRect(
+        hazard.x + 3,
+        hazard.y + 3,
+        hazard.width - 6,
+        hazard.height - 6,
+        11
+      );
+
+      this.hazardGraphics.lineStyle(4, 0x64748b, 0.24);
+      this.hazardGraphics.strokeRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 13);
+      this.hazardGraphics.lineStyle(2, 0x0f172a, 0.88);
+      this.hazardGraphics.strokeRoundedRect(
+        hazard.x + 2,
+        hazard.y + 2,
+        hazard.width - 4,
+        hazard.height - 4,
+        11
+      );
+
+      this.hazardGraphics.fillStyle(0x22334e, 0.5);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.9, hazard.height * 0.68);
+      this.hazardGraphics.fillStyle(0x131d2f, 0.74);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.72, hazard.height * 0.53);
+      this.hazardGraphics.fillStyle(0x0a101b, 0.88);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.54, hazard.height * 0.39);
+      this.hazardGraphics.fillStyle(0x02050b, 0.96);
+      this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.38, hazard.height * 0.26);
+
+      this.hazardGraphics.lineStyle(2, 0x93a9c3, 0.2);
+      this.hazardGraphics.strokeEllipse(centerX, centerY, hazard.width * 0.92, hazard.height * 0.7);
+      this.hazardGraphics.lineStyle(1, 0xffffff, 0.08);
+      this.hazardGraphics.strokeEllipse(centerX, centerY - hazard.height * 0.045, hazard.width * 0.6, hazard.height * 0.2);
+
+      const crackCount = 11;
+      this.hazardGraphics.lineStyle(1, 0x334155, 0.32);
+      for (let i = 0; i < crackCount; i += 1) {
+        const angle = (Math.PI * 2 * i) / crackCount;
+        const rimX = centerX + Math.cos(angle) * (hazard.width * 0.39);
+        const rimY = centerY + Math.sin(angle) * (hazard.height * 0.29);
+        const innerX = centerX + Math.cos(angle + 0.18) * (hazard.width * 0.2);
+        const innerY = centerY + Math.sin(angle + 0.18) * (hazard.height * 0.14);
+        this.hazardGraphics.lineBetween(rimX, rimY, innerX, innerY);
+      }
+
+      this.hazardGraphics.fillStyle(0xcbd5e1, 0.18);
+      this.hazardGraphics.fillCircle(centerX - hazard.width * 0.31, centerY - hazard.height * 0.16, 2.4);
+      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.26, centerY - hazard.height * 0.21, 1.8);
+      this.hazardGraphics.fillCircle(centerX + hazard.width * 0.18, centerY + hazard.height * 0.2, 1.6);
+
+      return;
+    }
+
     this.hazardGraphics.fillStyle(0x1e293b, 0.76);
     this.hazardGraphics.fillRoundedRect(hazard.x, hazard.y, hazard.width, hazard.height, 10);
     this.hazardGraphics.fillStyle(0x334155, 0.8);
@@ -978,35 +1577,9 @@ class GameScene extends Phaser.Scene {
     this.hazardGraphics.fillEllipse(centerX, centerY, hazard.width * 0.64, hazard.height * 0.42);
   }
 
-  private createHazardLabel(hazard: HazardZone): void {
-    if (this.scale.width < 980 || this.scale.height < 620) {
-      return;
-    }
-
-    let title = "ZONE";
-    let icon = "◼";
-    if (hazard.type === "lava") {
-      title = "LAVA";
-      icon = "🔥";
-    } else if (hazard.type === "electric") {
-      title = "ELEKTROFELD";
-      icon = "⚡";
-    } else if (hazard.type === "pit") {
-      title = "ABGRUND";
-      icon = "🌀";
-    }
-
-    // Kleine Label-Box mit Icon verbessert Lesbarkeit in hektischen Situationen.
-    const label = this.add
-      .text(hazard.x + 10, hazard.y + 8, `${icon} ${title}`, {
-        fontSize: "12px",
-        color: "#0f172a",
-        fontStyle: "bold",
-        backgroundColor: "#f8fafccc",
-        padding: { left: 8, right: 8, top: 4, bottom: 4 },
-      })
-      .setDepth(4);
-    this.hazardLabels.push(label);
+  private createHazardLabel(_hazard: HazardZone): void {
+    // Beschriftung fuer Hazard-Zonen ist bewusst deaktiviert.
+    return;
   }
 
   private drawPlayers(): void {
@@ -1053,6 +1626,8 @@ class GameScene extends Phaser.Scene {
 
     for (const player of visiblePlayers) {
       const hasSpawnProtection = player.spawnProtectionMsLeft > 0;
+      const hasStun = player.stunnedMsLeft > 0;
+      const isBountyTarget = this.snapshot?.bountyTargetId === player.id;
       const protectionPulse = hasSpawnProtection
         ? 0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this.time.now / 130))
         : 1;
@@ -1063,6 +1638,17 @@ class GameScene extends Phaser.Scene {
 
       // Agar.io-aehnlicher Look: ein einzelner Kreis, der mit der Masse waechst.
       this.playerGraphics.fillCircle(px, py, player.radius);
+
+      if (isBountyTarget) {
+        this.playerGraphics.lineStyle(3, 0xf59e0b, 0.9);
+        this.playerGraphics.strokeCircle(px, py, player.radius + 5);
+      }
+
+      if (hasStun) {
+        const stunPulse = 0.65 + 0.3 * (0.5 + 0.5 * Math.sin(this.time.now / 90));
+        this.playerGraphics.lineStyle(2, 0xfacc15, stunPulse);
+        this.playerGraphics.strokeCircle(px, py, player.radius + 9);
+      }
 
       let label = this.nameLabels.get(player.id);
       if (!label) {
@@ -1094,10 +1680,12 @@ class GameScene extends Phaser.Scene {
         shownLabels += 1;
       }
       const botMarker = player.isBot ? " [BOT]" : "";
+      const bountyMarker = isBountyTarget ? " [BOUNTY]" : "";
       const shieldMarker = hasSpawnProtection ? " [SAFE]" : "";
       const invulnMarker = player.invulnerableMsLeft > 0 ? " [INV]" : "";
       const stealthMarker = player.stealthMsLeft > 0 ? " [STL]" : "";
-      const labelText = `${player.name}${botMarker}${shieldMarker}${invulnMarker}${stealthMarker}`;
+      const stunMarker = hasStun ? " [STUN]" : "";
+      const labelText = `${player.name}${botMarker}${bountyMarker}${shieldMarker}${invulnMarker}${stealthMarker}${stunMarker}`;
       if (this.lastLabelText.get(player.id) !== labelText) {
         label.setText(labelText);
         this.lastLabelText.set(player.id, labelText);
@@ -1137,19 +1725,39 @@ class GameScene extends Phaser.Scene {
   }
 
   private updateHud(): void {
+    this.updateStatus();
+
+    const bountyTargetId = this.snapshot?.bountyTargetId ?? null;
+    const bountyBonus = this.snapshot?.bountyBonus ?? 0;
+
     const local = this.getLocalPlayer();
     if (local) {
       const protectionText =
         local.spawnProtectionMsLeft > 0
           ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
           : "";
+      const stunText =
+        local.stunnedMsLeft > 0
+          ? ` | Paralyse: ${(local.stunnedMsLeft / 1000).toFixed(1)}s`
+          : "";
+      const shockText =
+        local.shockCooldownMsLeft > 0
+          ? ` | Blitz-CD: ${(local.shockCooldownMsLeft / 1000).toFixed(1)}s`
+          : " | Blitz: SPACE bereit";
+      const rocketText =
+        local.rocketAmmo > 0
+          ? " | Rakete: R bereit"
+          : " | Rakete: keine";
       const effects = [
         this.formatEffectLabel("Speed", local.speedBoostMsLeft),
         this.formatEffectLabel("Unverwundbar", local.invulnerableMsLeft),
         this.formatEffectLabel("Unsichtbar", local.stealthMsLeft),
       ].filter((entry): entry is string => Boolean(entry));
       const effectText = effects.length > 0 ? ` | Effekte: ${effects.join(" • ")}` : "";
-      hudPlayerElement.textContent = `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${effectText}`;
+      const localBountyText =
+        bountyTargetId === local.id ? ` | Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P` : "";
+      hudPlayerElement.textContent =
+        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${stunText}${effectText}${shockText}${rocketText}${localBountyText}`;
     } else {
       hudPlayerElement.textContent = "Warte auf Spawn…";
     }
@@ -1159,23 +1767,46 @@ class GameScene extends Phaser.Scene {
         ? this.snapshot.leaderboard
         : [...(this.snapshot?.players ?? [])].sort((a, b) => b.score - a.score);
 
-    const ranking = rankingSource
+    const nameWidth = this.hudCompact ? 10 : 12;
+    const rankingRows = rankingSource
       .slice(0, this.leaderboardLines)
       .map((player, index) => {
-        const rankBadge = index === 0 ? "#1" : index === 1 ? "#2" : index === 2 ? "#3" : `#${index + 1}`;
-        const shortName = player.name.slice(0, this.hudCompact ? 8 : 10);
-        const role = player.isBot ? "BOT" : "PLY";
-        return `${rankBadge} ${shortName} ${role}  ${player.score} P`;
-      })
-      .join("\n");
+        const rankToken = String(index + 1).padStart(2, " ");
+        const nameToken = player.name.slice(0, nameWidth).padEnd(nameWidth, " ");
+        const scoreToken = String(Math.max(0, Math.round(player.score))).padStart(5, " ");
+        return `${rankToken} ${nameToken} ${scoreToken}`;
+      });
 
-    hudScoreboardElement.textContent = ranking || "• Noch keine Punkte";
+    if (rankingRows.length === 0) {
+      hudScoreboardElement.textContent = "   Noch keine Punkte";
+      return;
+    }
+
+    const header = `RK ${"NAME".padEnd(nameWidth, " ")} PUNKTE`;
+    const separator = "-".repeat(header.length);
+    hudScoreboardElement.textContent = [header, separator, ...rankingRows].join("\n");
   }
 
   private updateStatus(): void {
     const qualityText = `Qualitaet: ${this.qualityMode.toUpperCase()} (F8)`;
+    const activeEvent = this.snapshot?.activeEvent;
+    const eventText =
+      activeEvent && activeEvent.kind !== "none"
+        ? ` | Event: ${activeEvent.title} (${Math.max(0, Math.ceil(activeEvent.msLeft / 1000))}s)`
+        : "";
+    const bountyTargetId = this.snapshot?.bountyTargetId;
+    const bountyBonus = Math.max(0, Math.round(this.snapshot?.bountyBonus ?? 0));
+    const specialBountyActive = Boolean(this.snapshot?.specialBountyActive);
+    const bountyTarget = bountyTargetId
+      ? this.snapshot?.players.find((player) => player.id === bountyTargetId)
+      : undefined;
+    const bountyText = bountyTarget
+      ? ` | Kopfgeld${specialBountyActive ? " [SPEZIAL]" : ""}: ${bountyTarget.name.slice(0, 10)} (+${bountyBonus}P)`
+      : "";
+
     if (socket.connected) {
-      hudStatusElement.textContent = `Online als ${playerName || "Spieler"} | ${qualityText}`;
+      hudStatusElement.textContent =
+        `Online als ${playerName || "Spieler"} | ${qualityText}${eventText}${bountyText}`;
     } else {
       hudStatusElement.textContent = `Warte auf Lobby-Start… | ${qualityText}`;
     }
@@ -1198,6 +1829,13 @@ class GameScene extends Phaser.Scene {
     }
     this.nameLabels.clear();
     this.lastLabelText.clear();
+    this.clearRocketPickupSprites();
+    this.clearStyledPickupSprites();
+    this.rocketTrails = [];
+    if (this.rocketTrailGraphics) {
+      this.rocketTrailGraphics.clear();
+    }
+    this.clearAnnouncementQueue();
     this.debugEnabled = false;
     debugOverlayElement.style.display = "none";
     debugOverlayElement.textContent = "";

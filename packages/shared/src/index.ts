@@ -20,7 +20,7 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
-export type PickupKind = "mass" | "speed" | "shield" | "stealth";
+export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score" | "rocket";
 
 export interface ForceOrb {
   id: string;
@@ -32,6 +32,7 @@ export interface ForceOrb {
 }
 
 export type SkinId = "starter" | "mint" | "sunset" | "rose" | "gold";
+export type MatchEventKind = "none" | "double_orbs" | "haste" | "bounty_rush";
 
 export interface LeaderboardEntry {
   id: string;
@@ -54,6 +55,9 @@ export interface PlayerSnapshot {
   speedBoostMsLeft: number;
   invulnerableMsLeft: number;
   stealthMsLeft: number;
+  stunnedMsLeft: number;
+  shockCooldownMsLeft: number;
+  rocketAmmo: number;
   mass: number;
   score: number;
   isBot: boolean;
@@ -69,6 +73,13 @@ export interface SnapshotDebugInfo {
   orbCap: number;
 }
 
+export interface ActiveMatchEventSnapshot {
+  kind: MatchEventKind;
+  title: string;
+  description: string;
+  msLeft: number;
+}
+
 export interface GameSnapshot {
   tick: number;
   serverTime: number;
@@ -78,6 +89,10 @@ export interface GameSnapshot {
   removedPlayerIds?: string[];
   removedPickupIds?: string[];
   leaderboard?: LeaderboardEntry[];
+  bountyTargetId?: string | null;
+  bountyBonus?: number;
+  specialBountyActive?: boolean;
+  activeEvent?: ActiveMatchEventSnapshot;
   debug?: SnapshotDebugInfo;
 }
 
@@ -97,6 +112,8 @@ export interface PlayerInputPayload {
   down: boolean;
   left: boolean;
   right: boolean;
+  ability: boolean;
+  rocketFire: boolean;
 }
 
 export interface DebugPingPayload {
