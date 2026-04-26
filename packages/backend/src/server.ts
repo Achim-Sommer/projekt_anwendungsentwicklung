@@ -36,8 +36,8 @@ const PLAYER_START_MASS = 10;
 const PLAYER_ACCELERATION_BASE = 2050;
 const PLAYER_MAX_SPEED_BASE = 450;
 const PLAYER_DRAG = 0.92;
-const SPEED_BOOST_MULTIPLIER = 1.22;
-const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.1;
+const SPEED_BOOST_MULTIPLIER = 1.36;
+const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.22;
 const RESPAWN_TIME_MS = 1800;
 const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
@@ -1252,35 +1252,92 @@ function canRocketTarget(source: ServerPlayer, target: ServerPlayer): boolean {
   return true;
 }
 
+function rocketAimDirection(source: ServerPlayer): { x: number; y: number } {
+  const inputX = (source.lastInput.right ? 1 : 0) - (source.lastInput.left ? 1 : 0);
+  const inputY = (source.lastInput.down ? 1 : 0) - (source.lastInput.up ? 1 : 0);
+  const inputDirection = normalize(inputX, inputY);
+  if (inputDirection.length > 0) {
+    return { x: inputDirection.x, y: inputDirection.y };
+  }
+
+  const velocityDirection = normalize(source.vx, source.vy);
+  if (velocityDirection.length > 0) {
+    return { x: velocityDirection.x, y: velocityDirection.y };
+  }
+
+  return { x: 1, y: 0 };
+}
+
+function rayDistanceToArenaEdge(originX: number, originY: number, dirX: number, dirY: number): number {
+  let best = Number.POSITIVE_INFINITY;
+
+  if (Math.abs(dirX) > 0.000001) {
+    const tx = dirX > 0 ? (arena.width - originX) / dirX : (0 - originX) / dirX;
+    if (tx >= 0) {
+      best = Math.min(best, tx);
+    }
+  }
+
+  if (Math.abs(dirY) > 0.000001) {
+    const ty = dirY > 0 ? (arena.height - originY) / dirY : (0 - originY) / dirY;
+    if (ty >= 0) {
+      best = Math.min(best, ty);
+    }
+  }
+
+  if (!Number.isFinite(best) || best < 0) {
+    return 0;
+  }
+
+  return best;
+}
+
 function tryFireRocketAtNearestTarget(source: ServerPlayer, now: number): void {
   if (!source.alive || source.rocketAmmo <= 0 || source.stunnedUntil > now) {
     return;
   }
 
+  const direction = rocketAimDirection(source);
+  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+
   let bestTarget: ServerPlayer | undefined;
-  let bestDistanceSq = Number.POSITIVE_INFINITY;
+  let bestHitDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of players.values()) {
     if (!canRocketTarget(source, candidate)) {
       continue;
     }
 
-    const dx = candidate.x - source.x;
-    const dy = candidate.y - source.y;
-    const distanceSq = dx * dx + dy * dy;
-    if (distanceSq >= bestDistanceSq) {
+    const relX = candidate.x - source.x;
+    const relY = candidate.y - source.y;
+    const projectedDistance = relX * direction.x + relY * direction.y;
+    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
+      continue;
+    }
+
+    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
+    const hitRadius = candidate.radius;
+    const hitRadiusSq = hitRadius * hitRadius;
+    if (perpendicularDistanceSq > hitRadiusSq) {
+      continue;
+    }
+
+    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
+    const hitDistance = projectedDistance - entryOffset;
+    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
       continue;
     }
 
     bestTarget = candidate;
-    bestDistanceSq = distanceSq;
+    bestHitDistance = hitDistance;
   }
+
+  source.rocketAmmo = Math.max(0, source.rocketAmmo - 1);
 
   if (!bestTarget) {
     return;
   }
 
-  source.rocketAmmo = Math.max(0, source.rocketAmmo - 1);
   bestTarget.lastThreatBy = source.id;
   knockOut(bestTarget, source.id, "rocket");
   combatBoostUntil = Math.max(combatBoostUntil, now + 2400);

@@ -157,6 +157,35 @@
         margin-bottom: 2px;
       }
 
+      .guide-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .orb-symbol {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        flex: 0 0 16px;
+      }
+
+      .orb-symbol-img {
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: rgba(15, 23, 42, 0.72);
+        object-fit: cover;
+      }
+
+      .orb-symbol-mass {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        color: #f8fafc;
+        background: radial-gradient(circle at 36% 32%, #fde68a, #f59e0b 70%);
+        box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.42) inset;
+      }
+
       #name-input {
         width: 100%;
         border: 1px solid rgba(148, 163, 184, 0.32);
@@ -491,23 +520,38 @@
             <h2>Powerup-Erklaerung</h2>
             <ul>
               <li>
-                <strong>Speed-Orb</strong>
+                <strong class="guide-label">
+                  <img class="orb-symbol orb-symbol-img" src="/speed-pickup.svg" alt="" aria-hidden="true" />
+                  Speed-Orb
+                </strong>
                 Erhoeht dein Tempo fuer einige Sekunden und hilft beim Entkommen oder Chasen.
               </li>
               <li>
-                <strong>Shield-Orb</strong>
+                <strong class="guide-label">
+                  <img class="orb-symbol orb-symbol-img" src="/shield-pickup.svg" alt="" aria-hidden="true" />
+                  Shield-Orb
+                </strong>
                 Macht dich kurz unverwundbar - ideal fuer riskante Pushes.
               </li>
               <li>
-                <strong>Stealth-Orb</strong>
+                <strong class="guide-label">
+                  <img class="orb-symbol orb-symbol-img" src="/stealth-pickup.svg" alt="" aria-hidden="true" />
+                  Stealth-Orb
+                </strong>
                 Macht dich kurzfristig unsichtbar und erschwert gegnerisches Tracking.
               </li>
               <li>
-                <strong>Rocket-Orb</strong>
-                Gibt dir eine Rakete. Mit R ausloesen, um Druck aufzubauen.
+                <strong class="guide-label">
+                  <img class="orb-symbol orb-symbol-img" src="/rocket-pickup.svg" alt="" aria-hidden="true" />
+                  Rocket-Orb
+                </strong>
+                Gibt dir eine Rakete. Mit R ausloesen.
               </li>
               <li>
-                <strong>Mass-Orb</strong>
+                <strong class="guide-label">
+                  <span class="orb-symbol orb-symbol-mass" aria-hidden="true">O</span>
+                  Mass-Orb
+                </strong>
                 Standard-Orb fuer Wachstum und konstante Punkte.
               </li>
             </ul>
