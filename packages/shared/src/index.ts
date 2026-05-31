@@ -20,7 +20,7 @@ export interface ArenaState {
   hazards: HazardZone[];
 }
 
-export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score" | "rocket";
+export type PickupKind = "mass" | "speed" | "shield" | "stealth" | "score" | "rocket" | "chain";
 
 export interface ForceOrb {
   id: string;
@@ -58,6 +58,7 @@ export interface PlayerSnapshot {
   stunnedMsLeft: number;
   shockCooldownMsLeft: number;
   rocketAmmo: number;
+  chainAmmo: number;
   mass: number;
   score: number;
   isBot: boolean;
@@ -114,6 +115,7 @@ export interface PlayerInputPayload {
   right: boolean;
   ability: boolean;
   rocketFire: boolean;
+  chainFire: boolean;
   aimX: number;
   aimY: number;
 }
@@ -137,12 +139,23 @@ export interface RocketShotPayload {
   serverTime: number;
 }
 
+export interface ChainShotPayload {
+  shooterId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  hitPlayerId?: string;
+  serverTime: number;
+}
+
 export interface ServerToClientEvents {
   welcome: (payload: WelcomePayload) => void;
   snapshot: (payload: GameSnapshot) => void;
   playerLeft: (payload: PlayerLeftPayload) => void;
   debugPong: (payload: DebugPongPayload) => void;
   rocketShot: (payload: RocketShotPayload) => void;
+  chainShot: (payload: ChainShotPayload) => void;
 }
 
 export interface ClientToServerEvents {
