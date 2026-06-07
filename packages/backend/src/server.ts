@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import type {
   ActiveMatchEventSnapshot,
   ArenaState,
+  ChainShotPayload,
   ClientToServerEvents,
   DebugPongPayload,
   ForceOrb,
@@ -63,12 +64,17 @@ const SPECIAL_PICKUP_RADIUS = 9;
 const ROCKET_PICKUP_CHANCE = 0.09;
 const ROCKET_PICKUP_RADIUS = 10;
 const ROCKET_HIT_PADDING = 10;
+const CHAIN_PICKUP_CHANCE = 0.07;
+const CHAIN_PICKUP_RADIUS = 10;
 const SPECIAL_SPEED_DURATION_MS = 5000;
 const SPECIAL_SHIELD_DURATION_MS = 7000;
 const SPECIAL_STEALTH_DURATION_MS = 8500;
 const SHOCK_EDGE_RANGE = 195;
 const SHOCK_STUN_MS = 1700;
 const SHOCK_COOLDOWN_MS = 7200;
+const CHAIN_EDGE_RANGE = 320;
+const CHAIN_STUN_MS = 1200;
+const CHAIN_SCORE_BONUS = 5;
 const BOT_SHOCK_COOLDOWN_MULTIPLIER = 2;
 const SHOCK_SCORE_BONUS = 4;
 const KILL_MASS_BONUS = 20;
@@ -147,8 +153,10 @@ interface ServerPlayer {
   stunnedUntil: number;
   shockCooldownUntil: number;
   rocketAmmo: number;
+  chainAmmo: number;
   shockInputHeld: boolean;
   rocketInputHeld: boolean;
+  chainInputHeld: boolean;
   lastInput: PlayerInputPayload;
   lastThreatBy?: string;
   aiTargetId?: string;
@@ -449,6 +457,7 @@ function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
     stunnedMsLeft: Math.max(0, player.stunnedUntil - now),
     shockCooldownMsLeft: Math.max(0, player.shockCooldownUntil - now),
     rocketAmmo: player.rocketAmmo,
+    chainAmmo: player.chainAmmo,
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -981,8 +990,10 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     stunnedUntil: 0,
     shockCooldownUntil: 0,
     rocketAmmo: 0,
+    chainAmmo: 0,
     shockInputHeld: false,
     rocketInputHeld: false,
+    chainInputHeld: false,
     lastInput: {
       seq: 0,
       up: false,
@@ -991,6 +1002,7 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
       right: false,
       ability: false,
       rocketFire: false,
+      chainFire: false,
       aimX: 1,
       aimY: 0,
     },
@@ -1022,6 +1034,7 @@ function buildSnapshot(): GameSnapshot {
     stunnedMsLeft: Math.max(0, player.stunnedUntil - now),
     shockCooldownMsLeft: Math.max(0, player.shockCooldownUntil - now),
     rocketAmmo: player.rocketAmmo,
+    chainAmmo: player.chainAmmo,
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -1190,6 +1203,10 @@ function canShockTarget(source: ServerPlayer, target: ServerPlayer, now: number)
   return true;
 }
 
+function canChainTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
+  return canShockTarget(source, target, now);
+}
+
 function isWithinShockEdgeRange(source: ServerPlayer, target: ServerPlayer): boolean {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
@@ -1354,6 +1371,72 @@ function tryFireRocketAtNearestTarget(source: ServerPlayer, now: number): void {
   combatBoostUntil = Math.max(combatBoostUntil, now + 2400);
 }
 
+function tryFireChainAtNearestTarget(source: ServerPlayer, now: number): void {
+  if (!source.alive || source.chainAmmo <= 0 || source.stunnedUntil > now) {
+    return;
+  }
+
+  const direction = rocketAimDirection(source);
+  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+
+  let bestTarget: ServerPlayer | undefined;
+  let bestHitDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of players.values()) {
+    if (!canChainTarget(source, candidate, now)) {
+      continue;
+    }
+
+    const relX = candidate.x - source.x;
+    const relY = candidate.y - source.y;
+    const projectedDistance = relX * direction.x + relY * direction.y;
+    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
+      continue;
+    }
+
+    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
+    const hitRadius = candidate.radius + CHAIN_EDGE_RANGE * 0.02;
+    const hitRadiusSq = hitRadius * hitRadius;
+    if (perpendicularDistanceSq > hitRadiusSq) {
+      continue;
+    }
+
+    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
+    const hitDistance = projectedDistance - entryOffset;
+    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
+      continue;
+    }
+
+    bestTarget = candidate;
+    bestHitDistance = hitDistance;
+  }
+
+  source.chainAmmo = Math.max(0, source.chainAmmo - 1);
+
+  const shotDistance = bestTarget ? Math.max(0, bestHitDistance) : Math.max(0, maxDistance);
+  const chainShotPayload: ChainShotPayload = {
+    shooterId: source.id,
+    fromX: source.x,
+    fromY: source.y,
+    toX: clamp(source.x + direction.x * shotDistance, 0, arena.width),
+    toY: clamp(source.y + direction.y * shotDistance, 0, arena.height),
+    hitPlayerId: bestTarget?.id,
+    serverTime: now,
+  };
+  io.emit("chainShot", chainShotPayload);
+
+  if (!bestTarget) {
+    return;
+  }
+
+  bestTarget.stunnedUntil = Math.max(bestTarget.stunnedUntil, now + CHAIN_STUN_MS);
+  bestTarget.vx = 0;
+  bestTarget.vy = 0;
+  bestTarget.lastThreatBy = source.id;
+  source.score += CHAIN_SCORE_BONUS;
+  combatBoostUntil = Math.max(combatBoostUntil, now + 1600);
+}
+
 function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
   const margin = 180;
   const left = clamp((margin - player.x) / margin, 0, 1);
@@ -1428,8 +1511,10 @@ function knockOut(
   victim.stealthUntil = 0;
   victim.stunnedUntil = 0;
   victim.rocketAmmo = 0;
+  victim.chainAmmo = 0;
   victim.shockInputHeld = false;
   victim.rocketInputHeld = false;
+  victim.chainInputHeld = false;
   victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
 
   applyMass(victim, -Math.max(0.6, victim.mass * 0.05));
@@ -1529,8 +1614,10 @@ function handleRespawns(now: number): void {
     player.stealthUntil = 0;
     player.stunnedUntil = 0;
     player.rocketAmmo = 0;
+    player.chainAmmo = 0;
     player.shockInputHeld = false;
     player.rocketInputHeld = false;
+    player.chainInputHeld = false;
     player.lastThreatBy = undefined;
   }
 }
@@ -1552,6 +1639,8 @@ function spawnOrb(now: number): void {
   let kind: PickupKind = "mass";
   if (specialRoll < ROCKET_PICKUP_CHANCE) {
     kind = "rocket";
+  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE) {
+    kind = "chain";
   } else if (specialRoll < ROCKET_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
     const specials: PickupKind[] = ["speed", "shield", "stealth"];
     kind = specials[Math.floor(Math.random() * specials.length)] ?? "speed";
@@ -1571,6 +1660,8 @@ function spawnOrb(now: number): void {
         ? ORB_RADIUS
         : kind === "rocket"
           ? ROCKET_PICKUP_RADIUS
+          : kind === "chain"
+            ? CHAIN_PICKUP_RADIUS
           : SPECIAL_PICKUP_RADIUS,
     value,
   };
@@ -1624,6 +1715,9 @@ function collectOrbs(playersList: ServerPlayer[], now: number): void {
           } else if (orb.kind === "rocket") {
             player.rocketAmmo = Math.min(1, player.rocketAmmo + 1);
             player.score += 6;
+          } else if (orb.kind === "chain") {
+            player.chainAmmo = Math.min(1, player.chainAmmo + 1);
+            player.score += 5;
           }
 
           cell.delete(orbId);
@@ -1954,6 +2048,7 @@ function runAi(now: number): void {
       right: move.x > moveThreshold,
       ability: shouldUseShock,
       rocketFire: rocketTargetAvailable,
+      chainFire: false,
       aimX: move.length > 0 ? move.x : bot.lastInput.aimX,
       aimY: move.length > 0 ? move.y : bot.lastInput.aimY,
     };
@@ -2003,6 +2098,12 @@ function tickSimulation(now: number, dt: number): void {
       tryFireRocketAtNearestTarget(player, now);
     }
     player.rocketInputHeld = wantsRocket;
+
+    const wantsChain = Boolean(player.lastInput.chainFire);
+    if (wantsChain && !player.chainInputHeld) {
+      tryFireChainAtNearestTarget(player, now);
+    }
+    player.chainInputHeld = wantsChain;
   }
 
   const combatActive = hasActiveCombat(activePlayers, now);
@@ -2177,6 +2278,7 @@ io.on("connection", (socket) => {
       right: Boolean(payload.right),
       ability: Boolean(payload.ability),
       rocketFire: Boolean(payload.rocketFire),
+      chainFire: Boolean(payload.chainFire),
       aimX: normalizedAim.length > 0 ? normalizedAim.x : current.lastInput.aimX,
       aimY: normalizedAim.length > 0 ? normalizedAim.y : current.lastInput.aimY,
     };

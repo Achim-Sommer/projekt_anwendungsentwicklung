@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { io, type Socket } from "socket.io-client";
 import type {
   ArenaState,
+  ChainShotPayload,
   ClientToServerEvents,
   DebugPongPayload,
   ForceOrb,
@@ -284,6 +285,7 @@ class GameScene extends Phaser.Scene {
     toX: number;
     toY: number;
     didHit: boolean;
+    kind: "rocket" | "chain";
     startedAt: number;
     expiresAt: number;
   }> = [];
@@ -301,6 +303,7 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
     aimX: number;
     aimY: number;
   } | null = null;
@@ -311,6 +314,7 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
     aimX: number;
     aimY: number;
   } | null = null;
@@ -345,6 +349,7 @@ class GameScene extends Phaser.Scene {
     right: Phaser.Input.Keyboard.Key;
     ability: Phaser.Input.Keyboard.Key;
     rocket: Phaser.Input.Keyboard.Key;
+    chain: Phaser.Input.Keyboard.Key;
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
@@ -361,6 +366,7 @@ class GameScene extends Phaser.Scene {
   private readonly onPlayerLeft: () => void;
   private readonly onDebugPong: (payload: DebugPongPayload) => void;
   private readonly onRocketShot: (payload: RocketShotPayload) => void;
+  private readonly onChainShot: (payload: ChainShotPayload) => void;
 
   constructor() {
     super({ key: "GameScene" });
@@ -432,12 +438,23 @@ class GameScene extends Phaser.Scene {
       this.latestRttMs = Math.max(0, Date.now() - payload.clientSentAt);
     };
     this.onRocketShot = (payload) => {
-      this.spawnRocketTrailSegment(
+      this.spawnProjectileTrailSegment(
         payload.fromX,
         payload.fromY,
         payload.toX,
         payload.toY,
         Boolean(payload.hitPlayerId),
+        "rocket",
+      );
+    };
+    this.onChainShot = (payload) => {
+      this.spawnProjectileTrailSegment(
+        payload.fromX,
+        payload.fromY,
+        payload.toX,
+        payload.toY,
+        Boolean(payload.hitPlayerId),
+        "chain",
       );
     };
   }
@@ -475,6 +492,7 @@ class GameScene extends Phaser.Scene {
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
       ability: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, false),
       rocket: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R, false),
+      chain: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E, false),
     };
     // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
     keyboard.disableGlobalCapture();
@@ -530,6 +548,7 @@ class GameScene extends Phaser.Scene {
     socket.on("playerLeft", this.onPlayerLeft);
     socket.on("debugPong", this.onDebugPong);
     socket.on("rocketShot", this.onRocketShot);
+    socket.on("chainShot", this.onChainShot);
   }
 
   update(): void {
@@ -559,6 +578,7 @@ class GameScene extends Phaser.Scene {
       ...moveInput,
       ability: this.keys.ability.isDown,
       rocketFire: this.keys.rocket.isDown,
+      chainFire: this.keys.chain.isDown,
       aimX: aimDirection.x,
       aimY: aimDirection.y,
     });
@@ -676,6 +696,7 @@ class GameScene extends Phaser.Scene {
       right: boolean;
       ability: boolean;
       rocketFire: boolean;
+      chainFire: boolean;
       aimX: number;
       aimY: number;
     },
@@ -686,6 +707,7 @@ class GameScene extends Phaser.Scene {
       right: boolean;
       ability: boolean;
       rocketFire: boolean;
+      chainFire: boolean;
       aimX: number;
       aimY: number;
     },
@@ -698,6 +720,7 @@ class GameScene extends Phaser.Scene {
       a.right === b.right &&
       a.ability === b.ability &&
       a.rocketFire === b.rocketFire &&
+      a.chainFire === b.chainFire &&
       Math.abs(a.aimX - b.aimX) < aimTolerance &&
       Math.abs(a.aimY - b.aimY) < aimTolerance
     );
@@ -710,6 +733,7 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
     aimX: number;
     aimY: number;
   }): void {
@@ -739,6 +763,7 @@ class GameScene extends Phaser.Scene {
       right: this.pendingInput.right,
       ability: this.pendingInput.ability,
       rocketFire: this.pendingInput.rocketFire,
+      chainFire: this.pendingInput.chainFire,
       aimX: this.pendingInput.aimX,
       aimY: this.pendingInput.aimY,
     };
@@ -1242,6 +1267,11 @@ class GameScene extends Phaser.Scene {
         continue;
       }
 
+      if (orb.kind === "chain") {
+        this.drawChainOrb(orb);
+        continue;
+      }
+
       if (isStyledPickupKind(orb.kind)) {
         visibleStyledOrbs.push(orb);
         continue;
@@ -1391,12 +1421,13 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private spawnRocketTrailSegment(
+  private spawnProjectileTrailSegment(
     fromX: number,
     fromY: number,
     toX: number,
     toY: number,
     didHit: boolean,
+    kind: "rocket" | "chain",
   ): void {
     if (this.arena) {
       fromX = clamp(fromX, 0, this.arena.width);
@@ -1413,6 +1444,7 @@ class GameScene extends Phaser.Scene {
       toX,
       toY,
       didHit,
+      kind,
       startedAt: now,
       expiresAt: now + ROCKET_TRAIL_MS,
     });
@@ -1439,16 +1471,26 @@ class GameScene extends Phaser.Scene {
       const tailX = Phaser.Math.Linear(trail.fromX, trail.toX, tailT);
       const tailY = Phaser.Math.Linear(trail.fromY, trail.toY, tailT);
 
-      this.rocketTrailGraphics.lineStyle(9, 0xfb7185, 0.18 * alpha);
+      const isChain = trail.kind === "chain";
+      const outerColor = isChain ? 0x67e8f9 : 0xfb7185;
+      const midColor = isChain ? 0x06b6d4 : 0xf97316;
+      const headColor = isChain ? 0xc4b5fd : 0xfef08a;
+      const coreColor = isChain ? 0x22d3ee : 0xfb923c;
+      const impactColor = isChain ? 0x38bdf8 : 0xfb7185;
+      const impactInnerColor = isChain ? 0xe0f2fe : 0xfef2f2;
+      const missStrokeColor = isChain ? 0x38bdf8 : 0x94a3b8;
+      const missFillColor = isChain ? 0x0f172a : 0x64748b;
+
+      this.rocketTrailGraphics.lineStyle(9, outerColor, 0.18 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
-      this.rocketTrailGraphics.lineStyle(5, 0xf97316, 0.48 * alpha);
+      this.rocketTrailGraphics.lineStyle(5, midColor, 0.48 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
-      this.rocketTrailGraphics.lineStyle(2, 0xfef08a, 0.88 * alpha);
+      this.rocketTrailGraphics.lineStyle(2, headColor, 0.88 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
 
-      this.rocketTrailGraphics.fillStyle(0xfef08a, 0.9 * alpha);
+      this.rocketTrailGraphics.fillStyle(headColor, 0.9 * alpha);
       this.rocketTrailGraphics.fillCircle(headX, headY, 2.8 + (1 - progress) * 2.4);
-      this.rocketTrailGraphics.fillStyle(0xfb923c, 0.55 * alpha);
+      this.rocketTrailGraphics.fillStyle(coreColor, 0.55 * alpha);
       this.rocketTrailGraphics.fillCircle(headX, headY, 4.5 + (1 - progress) * 1.8);
 
       if (progress >= 0.68) {
@@ -1459,13 +1501,13 @@ class GameScene extends Phaser.Scene {
           const outerRadius = 14 + impact * 24;
           const innerRadius = 8 + impact * 14;
 
-          this.rocketTrailGraphics.lineStyle(3, 0xfb7185, 0.78 * pulse);
+          this.rocketTrailGraphics.lineStyle(3, impactColor, 0.78 * pulse);
           this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, outerRadius);
-          this.rocketTrailGraphics.lineStyle(2, 0xfef2f2, 0.74 * pulse);
+          this.rocketTrailGraphics.lineStyle(2, impactInnerColor, 0.74 * pulse);
           this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, innerRadius);
 
           const crossSize = 5 + impact * 7;
-          this.rocketTrailGraphics.lineStyle(2.5, 0xfda4af, 0.82 * pulse);
+          this.rocketTrailGraphics.lineStyle(2.5, impactColor, 0.82 * pulse);
           this.rocketTrailGraphics.lineBetween(
             trail.toX - crossSize,
             trail.toY - crossSize,
@@ -1479,17 +1521,33 @@ class GameScene extends Phaser.Scene {
             trail.toY + crossSize,
           );
 
-          this.rocketTrailGraphics.fillStyle(0xfb7185, 0.24 * pulse);
+          this.rocketTrailGraphics.fillStyle(impactColor, 0.24 * pulse);
           this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 10 + impact * 12);
         } else {
           const missRadius = 9 + impact * 14;
-          this.rocketTrailGraphics.lineStyle(1.5, 0x94a3b8, 0.45 * pulse);
+          this.rocketTrailGraphics.lineStyle(1.5, missStrokeColor, 0.45 * pulse);
           this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, missRadius);
-          this.rocketTrailGraphics.fillStyle(0x64748b, 0.16 * pulse);
+          this.rocketTrailGraphics.fillStyle(missFillColor, 0.16 * pulse);
           this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 7 + impact * 8);
         }
       }
     }
+  }
+
+  private drawChainOrb(orb: ForceOrb): void {
+    const phase = this.time.now * 0.0061 + orb.x * 0.012 + orb.y * 0.008;
+    const pulse = 0.9 + 0.1 * Math.sin(phase);
+
+    this.pickupGraphics.fillStyle(0x0f172a, 0.2);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4.5 + pulse);
+    this.pickupGraphics.fillStyle(0x38bdf8, 0.18);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 1.6 + pulse * 0.4);
+    this.pickupGraphics.fillStyle(0x67e8f9, 0.92);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7 + pulse * 0.16);
+    this.pickupGraphics.lineStyle(1.4, 0xe0f2fe, 0.84);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.4);
+    this.pickupGraphics.lineStyle(1.2, 0x38bdf8, 0.56);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.3);
   }
 
   private drawHazards(): void {
@@ -1863,6 +1921,7 @@ class GameScene extends Phaser.Scene {
     socket.off("playerLeft", this.onPlayerLeft);
     socket.off("debugPong", this.onDebugPong);
     socket.off("rocketShot", this.onRocketShot);
+    socket.off("chainShot", this.onChainShot);
     for (const label of this.hazardLabels) {
       label.destroy();
     }
