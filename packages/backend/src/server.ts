@@ -1641,7 +1641,7 @@ function spawnOrb(now: number): void {
     kind = "rocket";
   } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE) {
     kind = "chain";
-  } else if (specialRoll < ROCKET_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
+  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
     const specials: PickupKind[] = ["speed", "shield", "stealth"];
     kind = specials[Math.floor(Math.random() * specials.length)] ?? "speed";
   }
