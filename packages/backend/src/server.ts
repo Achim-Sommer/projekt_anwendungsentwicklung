@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import type {
   ActiveMatchEventSnapshot,
   ArenaState,
+  ChainShotPayload,
   ClientToServerEvents,
   DebugPongPayload,
   ForceOrb,
@@ -14,6 +15,7 @@ import type {
   PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
+  RocketShotPayload,
   SnapshotDebugInfo,
   ServerToClientEvents,
   SkinId,
@@ -29,15 +31,14 @@ const DT = 1 / TICK_RATE;
 const FIXED_STEP_MS = 1000 / TICK_RATE;
 const SIM_LOOP_INTERVAL_MS = FIXED_STEP_MS;
 const MAX_SIM_STEPS_PER_FRAME = 4;
-const STREAM_PLAYER_RADIUS = 980;
 const STREAM_FULL_RESYNC_MS = 8000;
 
 const PLAYER_START_MASS = 10;
 const PLAYER_ACCELERATION_BASE = 2050;
 const PLAYER_MAX_SPEED_BASE = 450;
 const PLAYER_DRAG = 0.92;
-const SPEED_BOOST_MULTIPLIER = 1.22;
-const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.1;
+const SPEED_BOOST_MULTIPLIER = 1.45;
+const SPEED_BOOST_TOP_SPEED_MULTIPLIER = 1.3;
 const RESPAWN_TIME_MS = 1800;
 const SPAWN_PROTECTION_MS = 2400;
 const SPAWN_SAFE_PLAYER_DISTANCE = 250;
@@ -60,14 +61,20 @@ const SCORE_DROP_ORB_MAX = 28;
 const SCORE_DROP_SPREAD_RADIUS = 92;
 const SPECIAL_PICKUP_CHANCE = 0.07;
 const SPECIAL_PICKUP_RADIUS = 9;
-const ROCKET_PICKUP_CHANCE = 0.004;
+const ROCKET_PICKUP_CHANCE = 0.09;
 const ROCKET_PICKUP_RADIUS = 10;
+const ROCKET_HIT_PADDING = 10;
+const CHAIN_PICKUP_CHANCE = 0.07;
+const CHAIN_PICKUP_RADIUS = 10;
 const SPECIAL_SPEED_DURATION_MS = 5000;
-const SPECIAL_SHIELD_DURATION_MS = 5500;
-const SPECIAL_STEALTH_DURATION_MS = 6500;
+const SPECIAL_SHIELD_DURATION_MS = 7000;
+const SPECIAL_STEALTH_DURATION_MS = 8500;
 const SHOCK_EDGE_RANGE = 195;
 const SHOCK_STUN_MS = 1700;
 const SHOCK_COOLDOWN_MS = 7200;
+const CHAIN_EDGE_RANGE = 320;
+const CHAIN_STUN_MS = 1200;
+const CHAIN_SCORE_BONUS = 5;
 const BOT_SHOCK_COOLDOWN_MULTIPLIER = 2;
 const SHOCK_SCORE_BONUS = 4;
 const KILL_MASS_BONUS = 20;
@@ -146,8 +153,10 @@ interface ServerPlayer {
   stunnedUntil: number;
   shockCooldownUntil: number;
   rocketAmmo: number;
+  chainAmmo: number;
   shockInputHeld: boolean;
   rocketInputHeld: boolean;
+  chainInputHeld: boolean;
   lastInput: PlayerInputPayload;
   lastThreatBy?: string;
   aiTargetId?: string;
@@ -448,6 +457,7 @@ function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
     stunnedMsLeft: Math.max(0, player.stunnedUntil - now),
     shockCooldownMsLeft: Math.max(0, player.shockCooldownUntil - now),
     rocketAmmo: player.rocketAmmo,
+    chainAmmo: player.chainAmmo,
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -772,7 +782,6 @@ function pickupSignature(pickup: ForceOrb): string {
 }
 
 function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): PlayerSnapshot[] {
-  const radiusSq = STREAM_PLAYER_RADIUS * STREAM_PLAYER_RADIUS;
   const result: PlayerSnapshot[] = [];
 
   for (const candidate of players.values()) {
@@ -782,14 +791,6 @@ function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): Player
 
     if (candidate.id !== localPlayer.id && hasStealth(candidate, now)) {
       continue;
-    }
-
-    if (candidate.id !== localPlayer.id) {
-      const dx = candidate.x - localPlayer.x;
-      const dy = candidate.y - localPlayer.y;
-      if (dx * dx + dy * dy > radiusSq) {
-        continue;
-      }
     }
 
     result.push(toPlayerSnapshot(candidate, now));
@@ -989,8 +990,10 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
     stunnedUntil: 0,
     shockCooldownUntil: 0,
     rocketAmmo: 0,
+    chainAmmo: 0,
     shockInputHeld: false,
     rocketInputHeld: false,
+    chainInputHeld: false,
     lastInput: {
       seq: 0,
       up: false,
@@ -999,6 +1002,9 @@ function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
       right: false,
       ability: false,
       rocketFire: false,
+      chainFire: false,
+      aimX: 1,
+      aimY: 0,
     },
     aiDecisionAt: 0,
     aiTickPhase: Math.floor(Math.random() * 3),
@@ -1028,6 +1034,7 @@ function buildSnapshot(): GameSnapshot {
     stunnedMsLeft: Math.max(0, player.stunnedUntil - now),
     shockCooldownMsLeft: Math.max(0, player.shockCooldownUntil - now),
     rocketAmmo: player.rocketAmmo,
+    chainAmmo: player.chainAmmo,
     mass: player.mass,
     score: player.score,
     isBot: player.isBot,
@@ -1196,6 +1203,10 @@ function canShockTarget(source: ServerPlayer, target: ServerPlayer, now: number)
   return true;
 }
 
+function canChainTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
+  return canShockTarget(source, target, now);
+}
+
 function isWithinShockEdgeRange(source: ServerPlayer, target: ServerPlayer): boolean {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
@@ -1252,38 +1263,178 @@ function canRocketTarget(source: ServerPlayer, target: ServerPlayer): boolean {
   return true;
 }
 
+function rocketAimDirection(source: ServerPlayer): { x: number; y: number } {
+  const aimDirection = normalize(source.lastInput.aimX, source.lastInput.aimY);
+  if (aimDirection.length > 0) {
+    return { x: aimDirection.x, y: aimDirection.y };
+  }
+
+  const inputX = (source.lastInput.right ? 1 : 0) - (source.lastInput.left ? 1 : 0);
+  const inputY = (source.lastInput.down ? 1 : 0) - (source.lastInput.up ? 1 : 0);
+  const inputDirection = normalize(inputX, inputY);
+  if (inputDirection.length > 0) {
+    return { x: inputDirection.x, y: inputDirection.y };
+  }
+
+  const velocityDirection = normalize(source.vx, source.vy);
+  if (velocityDirection.length > 0) {
+    return { x: velocityDirection.x, y: velocityDirection.y };
+  }
+
+  return { x: 1, y: 0 };
+}
+
+function rayDistanceToArenaEdge(originX: number, originY: number, dirX: number, dirY: number): number {
+  let best = Number.POSITIVE_INFINITY;
+
+  if (Math.abs(dirX) > 0.000001) {
+    const tx = dirX > 0 ? (arena.width - originX) / dirX : (0 - originX) / dirX;
+    if (tx >= 0) {
+      best = Math.min(best, tx);
+    }
+  }
+
+  if (Math.abs(dirY) > 0.000001) {
+    const ty = dirY > 0 ? (arena.height - originY) / dirY : (0 - originY) / dirY;
+    if (ty >= 0) {
+      best = Math.min(best, ty);
+    }
+  }
+
+  if (!Number.isFinite(best) || best < 0) {
+    return 0;
+  }
+
+  return best;
+}
+
 function tryFireRocketAtNearestTarget(source: ServerPlayer, now: number): void {
   if (!source.alive || source.rocketAmmo <= 0 || source.stunnedUntil > now) {
     return;
   }
 
+  const direction = rocketAimDirection(source);
+  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+
   let bestTarget: ServerPlayer | undefined;
-  let bestDistanceSq = Number.POSITIVE_INFINITY;
+  let bestHitDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of players.values()) {
     if (!canRocketTarget(source, candidate)) {
       continue;
     }
 
-    const dx = candidate.x - source.x;
-    const dy = candidate.y - source.y;
-    const distanceSq = dx * dx + dy * dy;
-    if (distanceSq >= bestDistanceSq) {
+    const relX = candidate.x - source.x;
+    const relY = candidate.y - source.y;
+    const projectedDistance = relX * direction.x + relY * direction.y;
+    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
+      continue;
+    }
+
+    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
+    const hitRadius = candidate.radius + ROCKET_HIT_PADDING;
+    const hitRadiusSq = hitRadius * hitRadius;
+    if (perpendicularDistanceSq > hitRadiusSq) {
+      continue;
+    }
+
+    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
+    const hitDistance = projectedDistance - entryOffset;
+    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
       continue;
     }
 
     bestTarget = candidate;
-    bestDistanceSq = distanceSq;
+    bestHitDistance = hitDistance;
   }
+
+  source.rocketAmmo = Math.max(0, source.rocketAmmo - 1);
+
+  const shotDistance = bestTarget ? Math.max(0, bestHitDistance) : Math.max(0, maxDistance);
+  const rocketShotPayload: RocketShotPayload = {
+    shooterId: source.id,
+    fromX: source.x,
+    fromY: source.y,
+    toX: clamp(source.x + direction.x * shotDistance, 0, arena.width),
+    toY: clamp(source.y + direction.y * shotDistance, 0, arena.height),
+    hitPlayerId: bestTarget?.id,
+    serverTime: now,
+  };
+  io.emit("rocketShot", rocketShotPayload);
 
   if (!bestTarget) {
     return;
   }
 
-  source.rocketAmmo = Math.max(0, source.rocketAmmo - 1);
   bestTarget.lastThreatBy = source.id;
   knockOut(bestTarget, source.id, "rocket");
   combatBoostUntil = Math.max(combatBoostUntil, now + 2400);
+}
+
+function tryFireChainAtNearestTarget(source: ServerPlayer, now: number): void {
+  if (!source.alive || source.chainAmmo <= 0 || source.stunnedUntil > now) {
+    return;
+  }
+
+  const direction = rocketAimDirection(source);
+  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+
+  let bestTarget: ServerPlayer | undefined;
+  let bestHitDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of players.values()) {
+    if (!canChainTarget(source, candidate, now)) {
+      continue;
+    }
+
+    const relX = candidate.x - source.x;
+    const relY = candidate.y - source.y;
+    const projectedDistance = relX * direction.x + relY * direction.y;
+    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
+      continue;
+    }
+
+    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
+    const hitRadius = candidate.radius + CHAIN_EDGE_RANGE * 0.02;
+    const hitRadiusSq = hitRadius * hitRadius;
+    if (perpendicularDistanceSq > hitRadiusSq) {
+      continue;
+    }
+
+    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
+    const hitDistance = projectedDistance - entryOffset;
+    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
+      continue;
+    }
+
+    bestTarget = candidate;
+    bestHitDistance = hitDistance;
+  }
+
+  source.chainAmmo = Math.max(0, source.chainAmmo - 1);
+
+  const shotDistance = bestTarget ? Math.max(0, bestHitDistance) : Math.max(0, maxDistance);
+  const chainShotPayload: ChainShotPayload = {
+    shooterId: source.id,
+    fromX: source.x,
+    fromY: source.y,
+    toX: clamp(source.x + direction.x * shotDistance, 0, arena.width),
+    toY: clamp(source.y + direction.y * shotDistance, 0, arena.height),
+    hitPlayerId: bestTarget?.id,
+    serverTime: now,
+  };
+  io.emit("chainShot", chainShotPayload);
+
+  if (!bestTarget) {
+    return;
+  }
+
+  bestTarget.stunnedUntil = Math.max(bestTarget.stunnedUntil, now + CHAIN_STUN_MS);
+  bestTarget.vx = 0;
+  bestTarget.vy = 0;
+  bestTarget.lastThreatBy = source.id;
+  source.score += CHAIN_SCORE_BONUS;
+  combatBoostUntil = Math.max(combatBoostUntil, now + 1600);
 }
 
 function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
@@ -1360,8 +1511,10 @@ function knockOut(
   victim.stealthUntil = 0;
   victim.stunnedUntil = 0;
   victim.rocketAmmo = 0;
+  victim.chainAmmo = 0;
   victim.shockInputHeld = false;
   victim.rocketInputHeld = false;
+  victim.chainInputHeld = false;
   victim.respawnAt = Date.now() + RESPAWN_TIME_MS;
 
   applyMass(victim, -Math.max(0.6, victim.mass * 0.05));
@@ -1461,8 +1614,10 @@ function handleRespawns(now: number): void {
     player.stealthUntil = 0;
     player.stunnedUntil = 0;
     player.rocketAmmo = 0;
+    player.chainAmmo = 0;
     player.shockInputHeld = false;
     player.rocketInputHeld = false;
+    player.chainInputHeld = false;
     player.lastThreatBy = undefined;
   }
 }
@@ -1484,7 +1639,9 @@ function spawnOrb(now: number): void {
   let kind: PickupKind = "mass";
   if (specialRoll < ROCKET_PICKUP_CHANCE) {
     kind = "rocket";
-  } else if (specialRoll < ROCKET_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
+  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE) {
+    kind = "chain";
+  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
     const specials: PickupKind[] = ["speed", "shield", "stealth"];
     kind = specials[Math.floor(Math.random() * specials.length)] ?? "speed";
   }
@@ -1503,6 +1660,8 @@ function spawnOrb(now: number): void {
         ? ORB_RADIUS
         : kind === "rocket"
           ? ROCKET_PICKUP_RADIUS
+          : kind === "chain"
+            ? CHAIN_PICKUP_RADIUS
           : SPECIAL_PICKUP_RADIUS,
     value,
   };
@@ -1556,6 +1715,9 @@ function collectOrbs(playersList: ServerPlayer[], now: number): void {
           } else if (orb.kind === "rocket") {
             player.rocketAmmo = Math.min(1, player.rocketAmmo + 1);
             player.score += 6;
+          } else if (orb.kind === "chain") {
+            player.chainAmmo = Math.min(1, player.chainAmmo + 1);
+            player.score += 5;
           }
 
           cell.delete(orbId);
@@ -1886,6 +2048,9 @@ function runAi(now: number): void {
       right: move.x > moveThreshold,
       ability: shouldUseShock,
       rocketFire: rocketTargetAvailable,
+      chainFire: false,
+      aimX: move.length > 0 ? move.x : bot.lastInput.aimX,
+      aimY: move.length > 0 ? move.y : bot.lastInput.aimY,
     };
   }
 }
@@ -1933,6 +2098,12 @@ function tickSimulation(now: number, dt: number): void {
       tryFireRocketAtNearestTarget(player, now);
     }
     player.rocketInputHeld = wantsRocket;
+
+    const wantsChain = Boolean(player.lastInput.chainFire);
+    if (wantsChain && !player.chainInputHeld) {
+      tryFireChainAtNearestTarget(player, now);
+    }
+    player.chainInputHeld = wantsChain;
   }
 
   const combatActive = hasActiveCombat(activePlayers, now);
@@ -2091,6 +2262,14 @@ io.on("connection", (socket) => {
     if (!current) {
       return;
     }
+
+    const rawAimX = Number(payload.aimX);
+    const rawAimY = Number(payload.aimY);
+    const normalizedAim = normalize(
+      Number.isFinite(rawAimX) ? rawAimX : 0,
+      Number.isFinite(rawAimY) ? rawAimY : 0,
+    );
+
     current.lastInput = {
       seq: Number.isFinite(payload.seq) ? payload.seq : current.lastInput.seq + 1,
       up: Boolean(payload.up),
@@ -2099,6 +2278,9 @@ io.on("connection", (socket) => {
       right: Boolean(payload.right),
       ability: Boolean(payload.ability),
       rocketFire: Boolean(payload.rocketFire),
+      chainFire: Boolean(payload.chainFire),
+      aimX: normalizedAim.length > 0 ? normalizedAim.x : current.lastInput.aimX,
+      aimY: normalizedAim.length > 0 ? normalizedAim.y : current.lastInput.aimY,
     };
   });
 

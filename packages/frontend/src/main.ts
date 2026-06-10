@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { io, type Socket } from "socket.io-client";
 import type {
   ArenaState,
+  ChainShotPayload,
   ClientToServerEvents,
   DebugPongPayload,
   ForceOrb,
@@ -10,6 +11,7 @@ import type {
   PickupKind,
   PlayerInputPayload,
   PlayerSnapshot,
+  RocketShotPayload,
   SnapshotDebugInfo,
   ServerToClientEvents,
 } from "@projekt/shared";
@@ -282,6 +284,8 @@ class GameScene extends Phaser.Scene {
     fromY: number;
     toX: number;
     toY: number;
+    didHit: boolean;
+    kind: "rocket" | "chain";
     startedAt: number;
     expiresAt: number;
   }> = [];
@@ -299,6 +303,9 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
+    aimX: number;
+    aimY: number;
   } | null = null;
   private pendingInput: {
     up: boolean;
@@ -307,6 +314,9 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
+    aimX: number;
+    aimY: number;
   } | null = null;
   private hudCompact = false;
   private leaderboardLines = 8;
@@ -339,6 +349,7 @@ class GameScene extends Phaser.Scene {
     right: Phaser.Input.Keyboard.Key;
     ability: Phaser.Input.Keyboard.Key;
     rocket: Phaser.Input.Keyboard.Key;
+    chain: Phaser.Input.Keyboard.Key;
   };
 
   private pointerWorld = new Phaser.Math.Vector2();
@@ -354,6 +365,8 @@ class GameScene extends Phaser.Scene {
   private readonly onSnapshot: (payload: GameSnapshot) => void;
   private readonly onPlayerLeft: () => void;
   private readonly onDebugPong: (payload: DebugPongPayload) => void;
+  private readonly onRocketShot: (payload: RocketShotPayload) => void;
+  private readonly onChainShot: (payload: ChainShotPayload) => void;
 
   constructor() {
     super({ key: "GameScene" });
@@ -406,7 +419,6 @@ class GameScene extends Phaser.Scene {
       }
       this.applyIncomingSnapshot(payload);
       this.detectSnapshotAnnouncements(previousSnapshot);
-      this.detectRocketShotVisuals(previousSnapshot);
       this.syncRenderPlayersFromSnapshot(false);
       this.resizeToArena();
       const pickupChanged =
@@ -424,6 +436,26 @@ class GameScene extends Phaser.Scene {
     };
     this.onDebugPong = (payload) => {
       this.latestRttMs = Math.max(0, Date.now() - payload.clientSentAt);
+    };
+    this.onRocketShot = (payload) => {
+      this.spawnProjectileTrailSegment(
+        payload.fromX,
+        payload.fromY,
+        payload.toX,
+        payload.toY,
+        Boolean(payload.hitPlayerId),
+        "rocket",
+      );
+    };
+    this.onChainShot = (payload) => {
+      this.spawnProjectileTrailSegment(
+        payload.fromX,
+        payload.fromY,
+        payload.toX,
+        payload.toY,
+        Boolean(payload.hitPlayerId),
+        "chain",
+      );
     };
   }
 
@@ -460,6 +492,7 @@ class GameScene extends Phaser.Scene {
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D, false),
       ability: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, false),
       rocket: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R, false),
+      chain: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E, false),
     };
     // Verhindert, dass Phaser globale WASD-Events schluckt, solange das DOM-Input aktiv ist.
     keyboard.disableGlobalCapture();
@@ -514,6 +547,8 @@ class GameScene extends Phaser.Scene {
     socket.on("snapshot", this.onSnapshot);
     socket.on("playerLeft", this.onPlayerLeft);
     socket.on("debugPong", this.onDebugPong);
+    socket.on("rocketShot", this.onRocketShot);
+    socket.on("chainShot", this.onChainShot);
   }
 
   update(): void {
@@ -538,10 +573,14 @@ class GameScene extends Phaser.Scene {
     }
 
     const moveInput = this.getMovementInput(player);
+    const aimDirection = this.getAimDirection(player, moveInput);
     this.scheduleInputSend({
       ...moveInput,
       ability: this.keys.ability.isDown,
       rocketFire: this.keys.rocket.isDown,
+      chainFire: this.keys.chain.isDown,
+      aimX: aimDirection.x,
+      aimY: aimDirection.y,
     });
     this.flushPendingInput();
 
@@ -593,6 +632,52 @@ class GameScene extends Phaser.Scene {
     };
   }
 
+  private getAimDirection(
+    player: PlayerSnapshot,
+    moveInput: {
+      up: boolean;
+      down: boolean;
+      left: boolean;
+      right: boolean;
+    },
+  ): { x: number; y: number } {
+    const render = this.renderPlayers.get(player.id);
+    const px = render?.x ?? player.x;
+    const py = render?.y ?? player.y;
+    const dx = this.pointerWorld.x - px;
+    const dy = this.pointerWorld.y - py;
+    const pointerDistance = Math.hypot(dx, dy);
+    if (pointerDistance > 0.01) {
+      return {
+        x: dx / pointerDistance,
+        y: dy / pointerDistance,
+      };
+    }
+
+    const inputX = (moveInput.right ? 1 : 0) - (moveInput.left ? 1 : 0);
+    const inputY = (moveInput.down ? 1 : 0) - (moveInput.up ? 1 : 0);
+    const inputLength = Math.hypot(inputX, inputY);
+    if (inputLength > 0.01) {
+      return {
+        x: inputX / inputLength,
+        y: inputY / inputLength,
+      };
+    }
+
+    const velocityLength = Math.hypot(player.vx, player.vy);
+    if (velocityLength > 0.01) {
+      return {
+        x: player.vx / velocityLength,
+        y: player.vy / velocityLength,
+      };
+    }
+
+    return {
+      x: this.lastSentInput?.aimX ?? 1,
+      y: this.lastSentInput?.aimY ?? 0,
+    };
+  }
+
   private estimateSnapshotBytes(payload: GameSnapshot): number {
     const playersBytes = payload.players.length * 68;
     const pickupsBytes = payload.pickups.length * 32;
@@ -611,6 +696,9 @@ class GameScene extends Phaser.Scene {
       right: boolean;
       ability: boolean;
       rocketFire: boolean;
+      chainFire: boolean;
+      aimX: number;
+      aimY: number;
     },
     b: {
       up: boolean;
@@ -619,15 +707,22 @@ class GameScene extends Phaser.Scene {
       right: boolean;
       ability: boolean;
       rocketFire: boolean;
+      chainFire: boolean;
+      aimX: number;
+      aimY: number;
     },
   ): boolean {
+    const aimTolerance = 0.02;
     return (
       a.up === b.up &&
       a.down === b.down &&
       a.left === b.left &&
       a.right === b.right &&
       a.ability === b.ability &&
-      a.rocketFire === b.rocketFire
+      a.rocketFire === b.rocketFire &&
+      a.chainFire === b.chainFire &&
+      Math.abs(a.aimX - b.aimX) < aimTolerance &&
+      Math.abs(a.aimY - b.aimY) < aimTolerance
     );
   }
 
@@ -638,6 +733,9 @@ class GameScene extends Phaser.Scene {
     right: boolean;
     ability: boolean;
     rocketFire: boolean;
+    chainFire: boolean;
+    aimX: number;
+    aimY: number;
   }): void {
     if (this.lastSentInput && this.inputStatesEqual(input, this.lastSentInput)) {
       this.pendingInput = null;
@@ -665,6 +763,9 @@ class GameScene extends Phaser.Scene {
       right: this.pendingInput.right,
       ability: this.pendingInput.ability,
       rocketFire: this.pendingInput.rocketFire,
+      chainFire: this.pendingInput.chainFire,
+      aimX: this.pendingInput.aimX,
+      aimY: this.pendingInput.aimY,
     };
     socket.emit("input", payload);
     this.lastInputSentAt = this.time.now;
@@ -1166,6 +1267,11 @@ class GameScene extends Phaser.Scene {
         continue;
       }
 
+      if (orb.kind === "chain") {
+        this.drawChainOrb(orb);
+        continue;
+      }
+
       if (isStyledPickupKind(orb.kind)) {
         visibleStyledOrbs.push(orb);
         continue;
@@ -1315,82 +1421,19 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private detectRocketShotVisuals(previousSnapshot: GameSnapshot | null): void {
-    const nextSnapshot = this.snapshot;
-    if (!previousSnapshot || !nextSnapshot) {
-      return;
-    }
-
-    const previousById = new Map(previousSnapshot.players.map((player) => [player.id, player]));
-    for (const shooter of nextSnapshot.players) {
-      const previous = previousById.get(shooter.id);
-      if (!previous) {
-        continue;
-      }
-      if (!previous.alive || !shooter.alive) {
-        continue;
-      }
-      if (previous.rocketAmmo <= shooter.rocketAmmo) {
-        continue;
-      }
-
-      this.spawnRocketTrailForShooter(shooter, nextSnapshot.players);
-    }
-  }
-
-  private spawnRocketTrailForShooter(shooter: PlayerSnapshot, players: PlayerSnapshot[]): void {
-    const sourceRender = this.renderPlayers.get(shooter.id);
-    const fromX = sourceRender?.x ?? shooter.x;
-    const fromY = sourceRender?.y ?? shooter.y;
-
-    let targetX = Number.NaN;
-    let targetY = Number.NaN;
-    let bestDistSq = Number.POSITIVE_INFINITY;
-
-    for (const candidate of players) {
-      if (candidate.id === shooter.id || !candidate.alive) {
-        continue;
-      }
-
-      const targetRender = this.renderPlayers.get(candidate.id);
-      const cx = targetRender?.x ?? candidate.x;
-      const cy = targetRender?.y ?? candidate.y;
-      const dx = cx - fromX;
-      const dy = cy - fromY;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        targetX = cx;
-        targetY = cy;
-      }
-    }
-
-    if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || bestDistSq > 1_500 * 1_500) {
-      const speed = Math.hypot(shooter.vx, shooter.vy);
-      let dirX = 1;
-      let dirY = 0;
-      if (speed > 0.01) {
-        dirX = shooter.vx / speed;
-        dirY = shooter.vy / speed;
-      }
-
-      if (speed <= 0.01 && shooter.id === this.localPlayerId) {
-        const lookDx = this.pointerWorld.x - fromX;
-        const lookDy = this.pointerWorld.y - fromY;
-        const lookLen = Math.hypot(lookDx, lookDy);
-        if (lookLen > 0.01) {
-          dirX = lookDx / lookLen;
-          dirY = lookDy / lookLen;
-        }
-      }
-
-      targetX = fromX + dirX * 280;
-      targetY = fromY + dirY * 280;
-    }
-
+  private spawnProjectileTrailSegment(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    didHit: boolean,
+    kind: "rocket" | "chain",
+  ): void {
     if (this.arena) {
-      targetX = clamp(targetX, 8, this.arena.width - 8);
-      targetY = clamp(targetY, 8, this.arena.height - 8);
+      fromX = clamp(fromX, 0, this.arena.width);
+      fromY = clamp(fromY, 0, this.arena.height);
+      toX = clamp(toX, 0, this.arena.width);
+      toY = clamp(toY, 0, this.arena.height);
     }
 
     const now = this.time.now;
@@ -1398,8 +1441,10 @@ class GameScene extends Phaser.Scene {
       id: this.rocketTrailCounter++,
       fromX,
       fromY,
-      toX: targetX,
-      toY: targetY,
+      toX,
+      toY,
+      didHit,
+      kind,
       startedAt: now,
       expiresAt: now + ROCKET_TRAIL_MS,
     });
@@ -1426,28 +1471,83 @@ class GameScene extends Phaser.Scene {
       const tailX = Phaser.Math.Linear(trail.fromX, trail.toX, tailT);
       const tailY = Phaser.Math.Linear(trail.fromY, trail.toY, tailT);
 
-      this.rocketTrailGraphics.lineStyle(9, 0xfb7185, 0.18 * alpha);
+      const isChain = trail.kind === "chain";
+      const outerColor = isChain ? 0x67e8f9 : 0xfb7185;
+      const midColor = isChain ? 0x06b6d4 : 0xf97316;
+      const headColor = isChain ? 0xc4b5fd : 0xfef08a;
+      const coreColor = isChain ? 0x22d3ee : 0xfb923c;
+      const impactColor = isChain ? 0x38bdf8 : 0xfb7185;
+      const impactInnerColor = isChain ? 0xe0f2fe : 0xfef2f2;
+      const missStrokeColor = isChain ? 0x38bdf8 : 0x94a3b8;
+      const missFillColor = isChain ? 0x0f172a : 0x64748b;
+
+      this.rocketTrailGraphics.lineStyle(9, outerColor, 0.18 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
-      this.rocketTrailGraphics.lineStyle(5, 0xf97316, 0.48 * alpha);
+      this.rocketTrailGraphics.lineStyle(5, midColor, 0.48 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
-      this.rocketTrailGraphics.lineStyle(2, 0xfef08a, 0.88 * alpha);
+      this.rocketTrailGraphics.lineStyle(2, headColor, 0.88 * alpha);
       this.rocketTrailGraphics.lineBetween(tailX, tailY, headX, headY);
 
-      this.rocketTrailGraphics.fillStyle(0xfef08a, 0.9 * alpha);
+      this.rocketTrailGraphics.fillStyle(headColor, 0.9 * alpha);
       this.rocketTrailGraphics.fillCircle(headX, headY, 2.8 + (1 - progress) * 2.4);
-      this.rocketTrailGraphics.fillStyle(0xfb923c, 0.55 * alpha);
+      this.rocketTrailGraphics.fillStyle(coreColor, 0.55 * alpha);
       this.rocketTrailGraphics.fillCircle(headX, headY, 4.5 + (1 - progress) * 1.8);
 
       if (progress >= 0.68) {
         const impact = clamp((progress - 0.68) / 0.32, 0, 1);
         const pulse = 1 - impact;
-        const radius = 12 + impact * 22;
-        this.rocketTrailGraphics.lineStyle(2, 0xfca5a5, 0.42 * pulse);
-        this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, radius);
-        this.rocketTrailGraphics.fillStyle(0xfb923c, 0.22 * pulse);
-        this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 9 + impact * 12);
+
+        if (trail.didHit) {
+          const outerRadius = 14 + impact * 24;
+          const innerRadius = 8 + impact * 14;
+
+          this.rocketTrailGraphics.lineStyle(3, impactColor, 0.78 * pulse);
+          this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, outerRadius);
+          this.rocketTrailGraphics.lineStyle(2, impactInnerColor, 0.74 * pulse);
+          this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, innerRadius);
+
+          const crossSize = 5 + impact * 7;
+          this.rocketTrailGraphics.lineStyle(2.5, impactColor, 0.82 * pulse);
+          this.rocketTrailGraphics.lineBetween(
+            trail.toX - crossSize,
+            trail.toY - crossSize,
+            trail.toX + crossSize,
+            trail.toY + crossSize,
+          );
+          this.rocketTrailGraphics.lineBetween(
+            trail.toX + crossSize,
+            trail.toY - crossSize,
+            trail.toX - crossSize,
+            trail.toY + crossSize,
+          );
+
+          this.rocketTrailGraphics.fillStyle(impactColor, 0.24 * pulse);
+          this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 10 + impact * 12);
+        } else {
+          const missRadius = 9 + impact * 14;
+          this.rocketTrailGraphics.lineStyle(1.5, missStrokeColor, 0.45 * pulse);
+          this.rocketTrailGraphics.strokeCircle(trail.toX, trail.toY, missRadius);
+          this.rocketTrailGraphics.fillStyle(missFillColor, 0.16 * pulse);
+          this.rocketTrailGraphics.fillCircle(trail.toX, trail.toY, 7 + impact * 8);
+        }
       }
     }
+  }
+
+  private drawChainOrb(orb: ForceOrb): void {
+    const phase = this.time.now * 0.0061 + orb.x * 0.012 + orb.y * 0.008;
+    const pulse = 0.9 + 0.1 * Math.sin(phase);
+
+    this.pickupGraphics.fillStyle(0x0f172a, 0.2);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 4.5 + pulse);
+    this.pickupGraphics.fillStyle(0x38bdf8, 0.18);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 1.6 + pulse * 0.4);
+    this.pickupGraphics.fillStyle(0x67e8f9, 0.92);
+    this.pickupGraphics.fillCircle(orb.x, orb.y, orb.radius + 0.7 + pulse * 0.16);
+    this.pickupGraphics.lineStyle(1.4, 0xe0f2fe, 0.84);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 3.4);
+    this.pickupGraphics.lineStyle(1.2, 0x38bdf8, 0.56);
+    this.pickupGraphics.strokeCircle(orb.x, orb.y, orb.radius + 1.3);
   }
 
   private drawHazards(): void {
@@ -1820,6 +1920,8 @@ class GameScene extends Phaser.Scene {
     socket.off("snapshot", this.onSnapshot);
     socket.off("playerLeft", this.onPlayerLeft);
     socket.off("debugPong", this.onDebugPong);
+    socket.off("rocketShot", this.onRocketShot);
+    socket.off("chainShot", this.onChainShot);
     for (const label of this.hazardLabels) {
       label.destroy();
     }
