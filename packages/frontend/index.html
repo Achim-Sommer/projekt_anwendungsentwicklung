@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Projekt Anwendungsentwicklung</title>
+    <title>Pit Arena – Lobby</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3CradialGradient id='g' cx='35%25' cy='30%25' r='75%25'%3E%3Cstop offset='0%25' stop-color='%23bbf7d0'/%3E%3Cstop offset='55%25' stop-color='%2322c55e'/%3E%3Cstop offset='100%25' stop-color='%23064e3b'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='16' cy='16' r='14' fill='url(%23g)'/%3E%3C/svg%3E"
+    />
     <style>
       * {
         margin: 0;
@@ -43,7 +47,7 @@
         align-items: center;
         justify-content: center;
         padding: 10px;
-        background: rgba(5, 15, 27, 0.62);
+        background: radial-gradient(ellipse at center, rgba(5, 15, 27, 0.5), rgba(3, 9, 18, 0.82) 82%);
         backdrop-filter: blur(6px);
         z-index: 999;
       }
@@ -52,17 +56,149 @@
         display: none;
       }
 
+      /* ---- Schwebende Hintergrund-Orbs ---- */
+
+      .lobby-orbs {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      .lobby-orb {
+        position: absolute;
+        border-radius: 50%;
+        animation: orb-drift 10s ease-in-out infinite alternate;
+      }
+
+      .orb-1 {
+        width: 150px;
+        height: 150px;
+        left: 7%;
+        top: 14%;
+        background: radial-gradient(circle at 32% 30%, rgba(74, 222, 128, 0.55), rgba(34, 197, 94, 0.16) 58%, transparent 72%);
+        filter: blur(7px);
+        animation-duration: 12s;
+      }
+
+      .orb-2 {
+        width: 56px;
+        height: 56px;
+        left: 15%;
+        bottom: 17%;
+        background: radial-gradient(circle at 35% 30%, rgba(125, 211, 252, 0.8), rgba(56, 189, 248, 0.2) 60%, transparent 74%);
+        filter: blur(1px);
+        box-shadow: 0 0 34px rgba(56, 189, 248, 0.3);
+        animation-duration: 8s;
+        animation-delay: -2.5s;
+      }
+
+      .orb-3 {
+        width: 92px;
+        height: 92px;
+        right: 9%;
+        top: 18%;
+        background: radial-gradient(circle at 34% 30%, rgba(253, 230, 138, 0.65), rgba(245, 158, 11, 0.18) 58%, transparent 72%);
+        filter: blur(3px);
+        animation-duration: 10s;
+        animation-delay: -5s;
+      }
+
+      .orb-4 {
+        width: 190px;
+        height: 190px;
+        right: 5%;
+        bottom: 10%;
+        background: radial-gradient(circle at 32% 30%, rgba(125, 211, 252, 0.4), rgba(56, 189, 248, 0.12) 58%, transparent 72%);
+        filter: blur(9px);
+        animation-duration: 13s;
+        animation-delay: -7s;
+      }
+
+      .orb-5 {
+        width: 36px;
+        height: 36px;
+        left: 30%;
+        top: 7%;
+        background: radial-gradient(circle at 35% 30%, rgba(187, 247, 208, 0.9), rgba(34, 197, 94, 0.25) 60%, transparent 74%);
+        box-shadow: 0 0 26px rgba(34, 197, 94, 0.35);
+        animation-duration: 7s;
+        animation-delay: -1.5s;
+      }
+
+      .orb-6 {
+        width: 44px;
+        height: 44px;
+        right: 27%;
+        bottom: 7%;
+        background: radial-gradient(circle at 35% 30%, rgba(253, 230, 138, 0.85), rgba(245, 158, 11, 0.22) 60%, transparent 74%);
+        box-shadow: 0 0 26px rgba(245, 158, 11, 0.3);
+        animation-duration: 9s;
+        animation-delay: -4s;
+      }
+
+      @keyframes orb-drift {
+        from {
+          transform: translate3d(0, 14px, 0) scale(1);
+        }
+        to {
+          transform: translate3d(12px, -18px, 0) scale(1.07);
+        }
+      }
+
+      /* ---- Karte ---- */
+
       .name-card {
+        position: relative;
         width: min(96vw, 1180px);
         max-height: min(92vh, 640px);
-        background: linear-gradient(160deg, rgba(12, 29, 45, 0.95), rgba(14, 36, 58, 0.96));
-        border: 1px solid rgba(56, 189, 248, 0.3);
+        border: 1px solid transparent;
         border-radius: 20px;
         padding: 24px;
         overflow: auto;
+        background:
+          linear-gradient(160deg, rgba(12, 29, 45, 0.96), rgba(14, 36, 58, 0.97)) padding-box,
+          linear-gradient(115deg, rgba(34, 197, 94, 0.6), rgba(56, 189, 248, 0.55), rgba(245, 158, 11, 0.5), rgba(56, 189, 248, 0.55), rgba(34, 197, 94, 0.6)) border-box;
+        background-size: auto, 320% 320%;
         box-shadow:
           0 22px 58px rgba(1, 8, 18, 0.55),
-          0 0 0 1px rgba(34, 211, 238, 0.18) inset;
+          0 0 46px rgba(56, 189, 248, 0.1);
+        animation:
+          card-in 0.55s cubic-bezier(0.18, 0.9, 0.26, 1.08) both,
+          border-glow 9s ease-in-out infinite alternate;
+      }
+
+      @keyframes card-in {
+        from {
+          opacity: 0;
+          transform: translateY(22px) scale(0.96);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes border-glow {
+        from {
+          background-position: 0 0, 0% 50%;
+        }
+        to {
+          background-position: 0 0, 100% 50%;
+        }
+      }
+
+      .name-card::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .name-card::-webkit-scrollbar-thumb {
+        background: rgba(56, 189, 248, 0.3);
+        border-radius: 8px;
+      }
+
+      .name-card::-webkit-scrollbar-track {
+        background: transparent;
       }
 
       .name-layout {
@@ -72,56 +208,319 @@
         align-items: stretch;
       }
 
+      /* ---- Mittlerer Bereich ---- */
+
       .name-center {
-        border: 1px solid rgba(56, 189, 248, 0.3);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        text-align: center;
+        border: 1px solid rgba(56, 189, 248, 0.28);
         border-radius: 14px;
-        padding: 14px;
-        background: linear-gradient(180deg, rgba(9, 24, 39, 0.8), rgba(8, 20, 34, 0.72));
+        padding: 20px 18px;
+        background: linear-gradient(180deg, rgba(9, 24, 39, 0.82), rgba(8, 20, 34, 0.74));
+        animation: rise-in 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.05s both;
+      }
+
+      @keyframes rise-in {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .lobby-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        align-self: center;
+        margin-bottom: 12px;
+        padding: 4px 12px;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.08);
+        color: #7dd3fc;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .pulse-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+        animation: dot-pulse 1.8s ease-out infinite;
+      }
+
+      @keyframes dot-pulse {
+        70% {
+          box-shadow: 0 0 0 7px rgba(34, 197, 94, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+        }
       }
 
       .name-center h1 {
-        font-size: clamp(20px, 4.3vw, 28px);
-        color: var(--text-main);
-        margin-bottom: 10px;
-        letter-spacing: 0.01em;
-        text-transform: none;
+        font-size: clamp(26px, 4.6vw, 38px);
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        background: linear-gradient(94deg, #4ade80 5%, #38bdf8 52%, #fbbf24 98%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 3px 14px rgba(56, 189, 248, 0.3));
+        margin-bottom: 8px;
       }
 
-      .name-center p {
+      .tagline {
         color: var(--text-sub);
         font-size: clamp(12px, 2.3vw, 14px);
-        margin-bottom: 16px;
-        line-height: 1.4;
+        line-height: 1.45;
+        max-width: 36ch;
+        margin: 0 auto 18px;
+      }
+
+      #name-input {
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 12px;
+        padding: 13px 16px;
+        background: rgba(5, 16, 30, 0.8);
+        color: var(--text-main);
+        font-size: 17px;
+        font-weight: 600;
+        text-align: center;
+        letter-spacing: 0.04em;
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      }
+
+      #name-input::placeholder {
+        color: #64748b;
+        font-weight: 400;
+      }
+
+      #name-input:focus {
+        border-color: rgba(56, 189, 248, 0.95);
+        background: rgba(7, 20, 36, 0.9);
+        box-shadow:
+          0 0 0 3px rgba(56, 189, 248, 0.18),
+          0 0 24px rgba(56, 189, 248, 0.22);
+      }
+
+      .name-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      #start-button {
+        position: relative;
+        overflow: hidden;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        border: none;
+        border-radius: 12px;
+        padding: 14px;
+        background: linear-gradient(95deg, var(--accent) 0%, var(--accent-2) 62%, var(--accent-warm) 135%);
+        background-size: 160% 100%;
+        color: #041725;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        cursor: pointer;
+        box-shadow: 0 8px 22px rgba(34, 197, 94, 0.28);
+        transition: transform 0.15s ease, box-shadow 0.2s ease, background-position 0.25s ease;
+      }
+
+      #start-button::after {
+        content: "";
+        position: absolute;
+        top: -20%;
+        bottom: -20%;
+        left: -70%;
+        width: 36%;
+        background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+        transform: skewX(-18deg);
+        animation: btn-shine 3.4s ease-in-out infinite;
+      }
+
+      @keyframes btn-shine {
+        0%, 55% {
+          left: -70%;
+        }
+        85%, 100% {
+          left: 135%;
+        }
+      }
+
+      #start-button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        background-position: 70% 0;
+        box-shadow: 0 10px 28px rgba(56, 189, 248, 0.38);
+      }
+
+      #start-button:active:not(:disabled) {
+        transform: translateY(0);
+      }
+
+      #start-button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      #start-button:disabled::after {
+        animation: none;
+        opacity: 0;
+      }
+
+      .btn-rocket {
+        font-size: 16px;
+        transition: transform 0.2s ease;
+      }
+
+      #start-button:hover:not(:disabled) .btn-rocket {
+        transform: translateX(4px);
+      }
+
+      #name-error {
+        min-height: 18px;
+        margin-top: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fda4af;
       }
 
       .name-helper {
-        margin-top: 10px;
-        margin-bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
         font-size: 12px;
-        color: #bfdbfe;
+        color: #93c5fd;
       }
+
+      kbd {
+        display: inline-block;
+        min-width: 26px;
+        padding: 2px 8px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-bottom-width: 2px;
+        border-radius: 6px;
+        background: rgba(15, 23, 42, 0.85);
+        color: #e0f2fe;
+        font-family: "Cascadia Mono", Consolas, monospace;
+        font-size: 11px;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .helper-sep {
+        color: #475569;
+      }
+
+      .helper-muted {
+        color: #64748b;
+      }
+
+      /* ---- Seiten-Panels ---- */
 
       .guide-panel {
         border-radius: 14px;
         padding: 14px;
-        border: 1px solid rgba(148, 163, 184, 0.34);
+        border: 1px solid rgba(148, 163, 184, 0.3);
         background: linear-gradient(180deg, rgba(8, 20, 33, 0.86), rgba(7, 16, 28, 0.8));
       }
 
       .events-panel {
-        border-color: rgba(245, 158, 11, 0.42);
+        border-color: rgba(245, 158, 11, 0.4);
+        animation: slide-in-left 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.14s both;
       }
 
       .powerup-panel {
-        border-color: rgba(34, 197, 94, 0.44);
+        border-color: rgba(34, 197, 94, 0.42);
+        animation: slide-in-right 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.14s both;
+      }
+
+      @keyframes slide-in-left {
+        from {
+          opacity: 0;
+          transform: translateX(-14px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes slide-in-right {
+        from {
+          opacity: 0;
+          transform: translateX(14px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
       }
 
       .guide-panel h2 {
-        color: #e2e8f0;
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        margin-bottom: 10px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding-bottom: 9px;
+        margin-bottom: 12px;
+      }
+
+      .guide-panel h2::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 2px;
+        width: 100%;
+        border-radius: 2px;
+      }
+
+      .events-panel h2 {
+        color: #fcd34d;
+      }
+
+      .events-panel h2::after {
+        background: linear-gradient(90deg, rgba(245, 158, 11, 0.75), transparent);
+      }
+
+      .powerup-panel h2 {
+        color: #86efac;
+      }
+
+      .powerup-panel h2::after {
+        background: linear-gradient(90deg, rgba(34, 197, 94, 0.75), transparent);
+      }
+
+      .panel-icon {
+        font-size: 14px;
+        filter: drop-shadow(0 0 6px rgba(248, 250, 252, 0.25));
       }
 
       .guide-panel ul {
@@ -136,17 +535,36 @@
       .guide-panel li {
         color: var(--text-sub);
         font-size: 12px;
-        line-height: 1.34;
-        border-left: 2px solid rgba(148, 163, 184, 0.5);
-        padding-left: 10px;
+        line-height: 1.38;
+        padding: 8px 10px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-left: 3px solid rgba(148, 163, 184, 0.5);
+        border-radius: 10px;
+        background: rgba(10, 22, 38, 0.55);
+        transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+      }
+
+      .guide-panel li:hover {
+        background: rgba(13, 30, 50, 0.85);
+        transform: translateY(-1px);
       }
 
       .events-panel li {
-        border-left-color: rgba(245, 158, 11, 0.64);
+        border-left-color: rgba(245, 158, 11, 0.66);
+      }
+
+      .events-panel li:hover {
+        border-color: rgba(245, 158, 11, 0.3);
+        border-left-color: #fbbf24;
       }
 
       .powerup-panel li {
-        border-left-color: rgba(34, 197, 94, 0.64);
+        border-left-color: rgba(34, 197, 94, 0.66);
+      }
+
+      .powerup-panel li:hover {
+        border-color: rgba(34, 197, 94, 0.3);
+        border-left-color: #4ade80;
       }
 
       .guide-panel li strong {
@@ -164,16 +582,43 @@
       }
 
       .orb-symbol {
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
-        flex: 0 0 16px;
+        flex: 0 0 18px;
+        animation: orb-bob 3.2s ease-in-out infinite;
+      }
+
+      .guide-panel li:nth-child(2) .orb-symbol {
+        animation-delay: 0.4s;
+      }
+
+      .guide-panel li:nth-child(3) .orb-symbol {
+        animation-delay: 0.8s;
+      }
+
+      .guide-panel li:nth-child(4) .orb-symbol {
+        animation-delay: 1.2s;
+      }
+
+      .guide-panel li:nth-child(5) .orb-symbol {
+        animation-delay: 1.6s;
+      }
+
+      @keyframes orb-bob {
+        0%, 100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-2px);
+        }
       }
 
       .orb-symbol-img {
         border: 1px solid rgba(148, 163, 184, 0.4);
         background: rgba(15, 23, 42, 0.72);
         object-fit: cover;
+        box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
       }
 
       .orb-symbol-mass {
@@ -183,60 +628,15 @@
         font-size: 10px;
         color: #f8fafc;
         background: radial-gradient(circle at 36% 32%, #fde68a, #f59e0b 70%);
-        box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.42) inset;
+        box-shadow:
+          0 0 0 1px rgba(148, 163, 184, 0.42) inset,
+          0 0 10px rgba(245, 158, 11, 0.35);
       }
 
-      #name-input {
-        width: 100%;
-        border: 1px solid rgba(148, 163, 184, 0.32);
-        border-radius: 12px;
-        padding: 13px 14px;
-        background: rgba(7, 19, 34, 0.72);
-        color: var(--text-main);
-        font-size: 17px;
-        letter-spacing: 0.03em;
-        outline: none;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      }
+      /* ---- HUD ---- */
 
-      #name-input:focus {
-        border-color: rgba(56, 189, 248, 0.95);
-        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
-      }
-
-      .name-actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 12px;
-      }
-
-      #start-button {
-        width: 100%;
-        border: none;
-        border-radius: 12px;
-        padding: 13px 14px;
-        background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 76%, var(--accent-warm) 100%);
-        color: #041725;
-        font-size: 15px;
-        font-weight: 700;
-        cursor: pointer;
-        letter-spacing: 0.04em;
-      }
-
-      #start-button:hover {
-        filter: brightness(1.06);
-      }
-
-      #start-button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      #name-error {
-        min-height: 18px;
-        margin-top: 10px;
-        font-size: 13px;
-        color: #fda4af;
+      [hidden] {
+        display: none !important;
       }
 
       #hud-overlay {
@@ -246,6 +646,23 @@
         width: min(92vw, 336px);
         pointer-events: none;
         z-index: 25;
+        transition: opacity 0.35s ease;
+      }
+
+      #ability-overlay {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: min(92vw, 264px);
+        pointer-events: none;
+        z-index: 25;
+        transition: opacity 0.35s ease;
+      }
+
+      /* HUD ausblenden, solange der Start Screen offen ist */
+      body:has(#name-overlay:not(.hidden)) #hud-overlay,
+      body:has(#name-overlay:not(.hidden)) #ability-overlay {
+        opacity: 0;
       }
 
       .hud-card {
@@ -257,48 +674,271 @@
         box-shadow: 0 12px 30px rgba(2, 10, 22, 0.36);
       }
 
-      #hud-status {
-        color: #dcfce7;
+      .hud-title {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #fcd34d;
         font-size: 12px;
-        font-weight: 700;
-      }
-
-      #hud-player {
-        color: #bfdbfe;
-        font-size: 12px;
-        margin-top: 2px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding-bottom: 7px;
         margin-bottom: 8px;
       }
 
-      .hud-title {
-        color: #fef3c7;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.03em;
-        margin-bottom: 5px;
+      .hud-title::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 2px;
+        width: 100%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, rgba(245, 158, 11, 0.7), transparent);
       }
 
+      /* Scoreboard (rechts) */
+
       #hud-scoreboard {
-        margin: 0;
-        padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        background: linear-gradient(175deg, rgba(10, 20, 34, 0.7), rgba(8, 16, 28, 0.8));
-        color: #f8fafc;
-        font-size: 12px;
-        line-height: 1.5;
-        font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-        font-variant-numeric: tabular-nums;
-        white-space: pre;
-        letter-spacing: 0.01em;
-        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       }
+
+      .score-row {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 9px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 9px;
+        background: rgba(10, 22, 38, 0.55);
+      }
+
+      .score-rank {
+        font-size: 12px;
+        font-weight: 800;
+        color: #64748b;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .score-row.rank-1 .score-rank {
+        color: #fbbf24;
+        font-size: 13px;
+      }
+
+      .score-row.rank-2 .score-rank {
+        color: #cbd5e1;
+        font-size: 13px;
+      }
+
+      .score-row.rank-3 .score-rank {
+        color: #fb923c;
+        font-size: 13px;
+      }
+
+      .score-row.rank-1 {
+        border-color: rgba(251, 191, 36, 0.32);
+        background: rgba(120, 80, 10, 0.16);
+      }
+
+      .score-name {
+        font-size: 14px;
+        font-weight: 700;
+        color: #f1f5f9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .score-points {
+        font-size: 14px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        color: #7dd3fc;
+      }
+
+      .score-row.is-me {
+        border-color: rgba(56, 189, 248, 0.55);
+        background: rgba(56, 189, 248, 0.12);
+      }
+
+      .score-row.is-me .score-name {
+        color: #bae6fd;
+      }
+
+      .score-empty {
+        font-size: 12px;
+        color: var(--text-sub);
+        padding: 4px 2px;
+      }
+
+      /* Fähigkeiten-Panel (links) */
+
+      .ability-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 7px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+      }
+
+      #ability-name {
+        font-size: 14px;
+        font-weight: 800;
+        color: #f8fafc;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #ability-score {
+        font-size: 15px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        color: #fcd34d;
+        flex-shrink: 0;
+      }
+
+      .ability-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+      }
+
+      .ability-row kbd {
+        flex: 0 0 52px;
+        width: 52px;
+      }
+
+      .ability-label {
+        flex: 1;
+        font-size: 13px;
+        font-weight: 600;
+        color: #cbd5e1;
+      }
+
+      .ability-state {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .ability-state.ready {
+        color: #4ade80;
+        text-shadow: 0 0 10px rgba(34, 197, 94, 0.45);
+      }
+
+      .ability-state.cooldown {
+        color: #fbbf24;
+      }
+
+      .ability-state.none {
+        color: #64748b;
+      }
+
+      #ability-effects {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 9px;
+      }
+
+      .effect-chip {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.7);
+        color: #e2e8f0;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .chip-speed {
+        border-color: rgba(34, 197, 94, 0.55);
+        color: #86efac;
+      }
+
+      .chip-shield {
+        border-color: rgba(56, 189, 248, 0.55);
+        color: #7dd3fc;
+      }
+
+      .chip-stealth {
+        border-color: rgba(167, 139, 250, 0.55);
+        color: #c4b5fd;
+      }
+
+      .chip-protect {
+        border-color: rgba(125, 211, 252, 0.45);
+        color: #bae6fd;
+      }
+
+      .chip-stun {
+        border-color: rgba(248, 113, 113, 0.55);
+        color: #fca5a5;
+      }
+
+      #ability-alert {
+        margin-top: 9px;
+        padding: 6px 9px;
+        border: 1px solid rgba(248, 113, 113, 0.55);
+        border-radius: 9px;
+        background: rgba(127, 29, 29, 0.35);
+        color: #fecaca;
+        font-size: 12px;
+        font-weight: 800;
+        animation: alert-pulse 1.6s ease-in-out infinite;
+      }
+
+      @keyframes alert-pulse {
+        0%, 100% {
+          box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
+        }
+        50% {
+          box-shadow: 0 0 14px 0 rgba(248, 113, 113, 0.45);
+        }
+      }
+
+      #ability-event {
+        margin-top: 9px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #fcd34d;
+        line-height: 1.4;
+      }
+
+      #ability-quality {
+        margin-top: 9px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #475569;
+      }
+
+      /* ---- Responsive ---- */
 
       @media (max-width: 900px), (max-height: 720px) {
         #hud-overlay {
           top: 8px;
           right: 8px;
-          width: min(96vw, 306px);
+          width: min(96vw, 300px);
+        }
+
+        #ability-overlay {
+          top: 8px;
+          left: 8px;
+          width: min(96vw, 236px);
         }
 
         .hud-card {
@@ -306,9 +946,14 @@
           padding: 9px 10px;
         }
 
-        #hud-scoreboard {
-          font-size: 11px;
-          padding: 7px 8px;
+        .score-row {
+          padding: 5px 8px;
+          gap: 7px;
+        }
+
+        .score-name,
+        .score-points {
+          font-size: 13px;
         }
 
         .name-card {
@@ -322,18 +967,23 @@
           gap: 10px;
         }
 
+        /* Name-Eingabe zuerst, Erklärungen darunter */
         .name-center {
-          padding: 12px;
+          order: -1;
+          padding: 14px 12px;
         }
 
         .name-center h1 {
-          font-size: 22px;
-          margin-bottom: 8px;
+          font-size: 24px;
         }
 
-        .name-center p {
+        .tagline {
           font-size: 13px;
           margin-bottom: 12px;
+        }
+
+        .lobby-badge {
+          margin-bottom: 8px;
         }
 
         .guide-panel {
@@ -341,8 +991,8 @@
         }
 
         .guide-panel h2 {
-          font-size: 14px;
-          margin-bottom: 8px;
+          font-size: 12px;
+          margin-bottom: 9px;
         }
 
         .guide-panel li {
@@ -355,25 +1005,45 @@
         }
 
         #start-button {
-          padding: 11px 12px;
+          padding: 12px;
           font-size: 14px;
         }
       }
 
       @media (max-width: 520px), (max-height: 480px) {
         #hud-overlay {
-          left: 6px;
+          top: 6px;
           right: 6px;
-          width: auto;
+          width: min(56vw, 280px);
         }
 
-        #hud-scoreboard {
-          line-height: 1.38;
-          padding: 6px 7px;
+        #ability-overlay {
+          top: 6px;
+          left: 6px;
+          width: min(40vw, 220px);
+        }
+
+        .score-name,
+        .score-points {
+          font-size: 12px;
+        }
+
+        .ability-label {
+          font-size: 12px;
+        }
+
+        #ability-quality {
+          display: none;
         }
 
         #name-overlay {
           padding: 6px;
+        }
+
+        .orb-1,
+        .orb-3,
+        .orb-4 {
+          display: none;
         }
 
         .name-card {
@@ -384,12 +1054,12 @@
         }
 
         .name-center {
-          padding: 10px;
+          padding: 12px 10px;
         }
 
-        .name-center p {
+        .tagline {
           margin-bottom: 10px;
-          line-height: 1.3;
+          line-height: 1.35;
         }
 
         .guide-panel {
@@ -398,8 +1068,8 @@
 
         .guide-panel li {
           font-size: 11.5px;
-          line-height: 1.28;
-          padding-left: 8px;
+          line-height: 1.3;
+          padding: 7px 8px;
         }
 
         .name-actions {
@@ -407,7 +1077,7 @@
         }
 
         #name-input {
-          letter-spacing: 0.01em;
+          letter-spacing: 0.02em;
         }
       }
 
@@ -423,22 +1093,44 @@
           gap: 18px;
         }
 
-        .name-center h1 {
-          font-size: 36px;
-          margin-bottom: 14px;
+        .name-center {
+          padding: 26px 24px;
         }
 
-        .name-center p {
+        .name-center h1 {
+          font-size: 44px;
+        }
+
+        .lobby-badge {
+          font-size: 12px;
+        }
+
+        .tagline {
           font-size: 17px;
-          margin-bottom: 18px;
+          margin-bottom: 22px;
         }
 
         .guide-panel h2 {
-          font-size: 20px;
+          font-size: 15px;
         }
 
         .guide-panel li {
-          font-size: 15px;
+          font-size: 14px;
+          padding: 10px 12px;
+        }
+
+        .guide-panel li strong {
+          font-size: 14px;
+        }
+
+        .orb-symbol {
+          width: 22px;
+          height: 22px;
+          flex: 0 0 22px;
+        }
+
+        .name-helper {
+          font-size: 13px;
         }
 
         #name-input {
@@ -447,8 +1139,50 @@
         }
 
         #start-button {
-          font-size: 18px;
+          font-size: 17px;
           padding: 16px 18px;
+        }
+
+        #hud-overlay {
+          width: min(90vw, 384px);
+        }
+
+        #ability-overlay {
+          width: min(90vw, 300px);
+        }
+
+        .hud-card {
+          border-radius: 17px;
+          padding: 12px 14px;
+        }
+
+        .hud-title {
+          font-size: 13px;
+        }
+
+        .score-row {
+          padding: 8px 11px;
+        }
+
+        .score-name,
+        .score-points {
+          font-size: 16px;
+        }
+
+        #ability-name {
+          font-size: 15px;
+        }
+
+        #ability-score {
+          font-size: 17px;
+        }
+
+        .ability-label {
+          font-size: 14px;
+        }
+
+        .ability-state {
+          font-size: 13px;
         }
       }
 
@@ -461,46 +1195,98 @@
           gap: 22px;
         }
       }
+
+      @media (prefers-reduced-motion: reduce) {
+        .name-card,
+        .name-center,
+        .events-panel,
+        .powerup-panel,
+        .lobby-orb,
+        .pulse-dot,
+        .orb-symbol,
+        #ability-alert,
+        #start-button::after {
+          animation: none;
+        }
+
+        .guide-panel li,
+        #start-button,
+        .btn-rocket {
+          transition: none;
+        }
+      }
     </style>
   </head>
   <body>
     <div id="hud-overlay">
       <div class="hud-card">
-        <div id="hud-status">Warte auf Lobby-Start…</div>
-        <div id="hud-player">Warte auf Spawn…</div>
-        <div class="hud-title">Scoreboard</div>
-        <pre id="hud-scoreboard">• Noch keine Punkte</pre>
+        <div class="hud-title"><span class="panel-icon" aria-hidden="true">🏆</span>Scoreboard</div>
+        <div id="hud-scoreboard">
+          <div class="score-empty">Noch keine Punkte</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="ability-overlay">
+      <div class="hud-card">
+        <div class="ability-header">
+          <span id="ability-name">Spieler</span>
+          <span id="ability-score">–</span>
+        </div>
+        <div class="ability-row">
+          <kbd>Space</kbd>
+          <span class="ability-label">⚡ Blitz</span>
+          <span id="ability-shock-state" class="ability-state none">–</span>
+        </div>
+        <div class="ability-row">
+          <kbd>R</kbd>
+          <span class="ability-label">🚀 Rakete</span>
+          <span id="ability-rocket-state" class="ability-state none">–</span>
+        </div>
+        <div id="ability-effects" hidden></div>
+        <div id="ability-alert" hidden></div>
+        <div id="ability-event" hidden></div>
+        <div id="ability-quality">Qualität: NORMAL (F8)</div>
       </div>
     </div>
 
     <div id="name-overlay">
+      <div class="lobby-orbs" aria-hidden="true">
+        <span class="lobby-orb orb-1"></span>
+        <span class="lobby-orb orb-2"></span>
+        <span class="lobby-orb orb-3"></span>
+        <span class="lobby-orb orb-4"></span>
+        <span class="lobby-orb orb-5"></span>
+        <span class="lobby-orb orb-6"></span>
+      </div>
       <div class="name-card">
         <div class="name-layout">
-          <aside class="guide-panel events-panel" aria-label="Event-Erklaerung">
-            <h2>Event-Erklaerung</h2>
+          <aside class="guide-panel events-panel" aria-label="Event-Erklärung">
+            <h2><span class="panel-icon" aria-hidden="true">⚡</span>Arena-Events</h2>
             <ul>
               <li>
-                <strong>Kopfgeld-Event</strong>
-                Ein markierter Spieler bringt bei einem Kill zusaetzliche Punkte und Bonus-Masse.
+                <strong>🎯 Kopfgeld-Event</strong>
+                Ein markierter Spieler bringt bei einem Kill zusätzliche Punkte und Bonus-Masse.
               </li>
               <li>
-                <strong>Spezial-Kopfgeld</strong>
+                <strong>💎 Spezial-Kopfgeld</strong>
                 Seltenes Kopfgeld mit hoher Belohnung. Im HUD als [SPEZIAL] markiert.
               </li>
               <li>
-                <strong>ORB-SCHUB</strong>
-                Normale Mass-Orbs geben fuer kurze Zeit doppelte Masse.
+                <strong>✨ ORB-SCHUB</strong>
+                Normale Mass-Orbs geben für kurze Zeit doppelte Masse.
               </li>
               <li>
-                <strong>HASTE / BOUNTY RUSH</strong>
-                HASTE macht alle schneller. BOUNTY RUSH erhoeht Kopfgeld-Punkte deutlich.
+                <strong>💨 HASTE / BOUNTY RUSH</strong>
+                HASTE macht alle schneller. BOUNTY RUSH erhöht Kopfgeld-Punkte deutlich.
               </li>
             </ul>
           </aside>
 
           <section class="name-center">
-            <h1>Pit Arena Lobby</h1>
-            <p>Wachse durch Orbs, lade Kraft auf und stosse kleinere Spieler in den Abgrund.</p>
+            <div class="lobby-badge"><span class="pulse-dot" aria-hidden="true"></span>Live-Lobby</div>
+            <h1>Pit Arena</h1>
+            <p class="tagline">Wachse durch Orbs, lade Kraft auf und stoße kleinere Spieler in den Abgrund.</p>
             <input
               id="name-input"
               type="text"
@@ -510,28 +1296,33 @@
               autofocus
             />
             <div class="name-actions">
-              <button id="start-button" type="button">In die Arena starten</button>
+              <button id="start-button" type="button">In die Arena starten<span class="btn-rocket" aria-hidden="true">🚀</span></button>
             </div>
             <div id="name-error"></div>
-            <p class="name-helper">Tipp: SPACE = Blitz, R = Rakete (wenn verfuegbar).</p>
+            <p class="name-helper">
+              <kbd>Space</kbd> Blitz
+              <span class="helper-sep" aria-hidden="true">·</span>
+              <kbd>R</kbd> Rakete
+              <span class="helper-muted">(wenn verfügbar)</span>
+            </p>
           </section>
 
-          <aside class="guide-panel powerup-panel" aria-label="Powerup-Erklaerung">
-            <h2>Powerup-Erklaerung</h2>
+          <aside class="guide-panel powerup-panel" aria-label="Powerup-Erklärung">
+            <h2><span class="panel-icon" aria-hidden="true">🚀</span>Powerups</h2>
             <ul>
               <li>
                 <strong class="guide-label">
                   <img class="orb-symbol orb-symbol-img" src="/speed-pickup.svg" alt="" aria-hidden="true" />
                   Speed-Orb
                 </strong>
-                Erhoeht dein Tempo fuer einige Sekunden und hilft beim Entkommen oder Chasen.
+                Erhöht dein Tempo für einige Sekunden und hilft beim Entkommen oder Chasen.
               </li>
               <li>
                 <strong class="guide-label">
                   <img class="orb-symbol orb-symbol-img" src="/shield-pickup.svg" alt="" aria-hidden="true" />
                   Shield-Orb
                 </strong>
-                Macht dich kurz unverwundbar - ideal fuer riskante Pushes.
+                Macht dich kurz unverwundbar - ideal für riskante Pushes.
               </li>
               <li>
                 <strong class="guide-label">
@@ -545,14 +1336,14 @@
                   <img class="orb-symbol orb-symbol-img" src="/rocket-pickup.svg" alt="" aria-hidden="true" />
                   Rocket-Orb
                 </strong>
-                Gibt dir eine Rakete. Mit R ausloesen.
+                Gibt dir eine Rakete. Mit R auslösen.
               </li>
               <li>
                 <strong class="guide-label">
                   <span class="orb-symbol orb-symbol-mass" aria-hidden="true">O</span>
                   Mass-Orb
                 </strong>
-                Standard-Orb fuer Wachstum und konstante Punkte.
+                Standard-Orb für Wachstum und konstante Punkte.
               </li>
             </ul>
           </aside>
