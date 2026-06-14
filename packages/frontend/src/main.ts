@@ -51,17 +51,39 @@ const nameInputElement = nameInput;
 const nameErrorElement = nameError;
 const startButtonElement = startButton;
 
-const hudStatus = document.getElementById("hud-status") as HTMLDivElement | null;
-const hudPlayer = document.getElementById("hud-player") as HTMLDivElement | null;
-const hudScoreboard = document.getElementById("hud-scoreboard") as HTMLPreElement | null;
+const hudScoreboard = document.getElementById("hud-scoreboard") as HTMLDivElement | null;
+const abilityName = document.getElementById("ability-name") as HTMLSpanElement | null;
+const abilityScore = document.getElementById("ability-score") as HTMLSpanElement | null;
+const abilityShockState = document.getElementById("ability-shock-state") as HTMLSpanElement | null;
+const abilityRocketState = document.getElementById("ability-rocket-state") as HTMLSpanElement | null;
+const abilityEffects = document.getElementById("ability-effects") as HTMLDivElement | null;
+const abilityAlert = document.getElementById("ability-alert") as HTMLDivElement | null;
+const abilityEvent = document.getElementById("ability-event") as HTMLDivElement | null;
+const abilityQuality = document.getElementById("ability-quality") as HTMLDivElement | null;
 
-if (!hudStatus || !hudPlayer || !hudScoreboard) {
+if (
+  !hudScoreboard ||
+  !abilityName ||
+  !abilityScore ||
+  !abilityShockState ||
+  !abilityRocketState ||
+  !abilityEffects ||
+  !abilityAlert ||
+  !abilityEvent ||
+  !abilityQuality
+) {
   throw new Error("HUD elements are missing in index.html.");
 }
 
-const hudStatusElement = hudStatus;
-const hudPlayerElement = hudPlayer;
 const hudScoreboardElement = hudScoreboard;
+const abilityNameElement = abilityName;
+const abilityScoreElement = abilityScore;
+const abilityShockStateElement = abilityShockState;
+const abilityRocketStateElement = abilityRocketState;
+const abilityEffectsElement = abilityEffects;
+const abilityAlertElement = abilityAlert;
+const abilityEventElement = abilityEvent;
+const abilityQualityElement = abilityQuality;
 
 const existingDebugOverlay = document.getElementById("hud-debug");
 const debugOverlayElement =
@@ -1817,11 +1839,25 @@ class GameScene extends Phaser.Scene {
     return this.snapshot?.players.find((player) => player.id === this.localPlayerId);
   }
 
-  private formatEffectLabel(prefix: string, msLeft: number): string | null {
-    if (msLeft <= 0) {
-      return null;
-    }
-    return `${prefix} ${(msLeft / 1000).toFixed(1)}s`;
+  private buildScoreRow(name: string, score: number, index: number, isLocal: boolean): HTMLDivElement {
+    const row = document.createElement("div");
+    const rankClass = index < 3 ? ` rank-${index + 1}` : "";
+    row.className = `score-row${rankClass}${isLocal ? " is-me" : ""}`;
+
+    const rank = document.createElement("span");
+    rank.className = "score-rank";
+    rank.textContent = index >= 0 ? String(index + 1) : "–";
+
+    const nameElement = document.createElement("span");
+    nameElement.className = "score-name";
+    nameElement.textContent = name;
+
+    const points = document.createElement("span");
+    points.className = "score-points";
+    points.textContent = String(Math.max(0, Math.round(score)));
+
+    row.append(rank, nameElement, points);
+    return row;
   }
 
   private updateHud(): void {
@@ -1831,35 +1867,58 @@ class GameScene extends Phaser.Scene {
     const bountyBonus = this.snapshot?.bountyBonus ?? 0;
 
     const local = this.getLocalPlayer();
+    abilityNameElement.textContent = playerName || "Spieler";
     if (local) {
-      const protectionText =
-        local.spawnProtectionMsLeft > 0
-          ? ` | Schutz: ${(local.spawnProtectionMsLeft / 1000).toFixed(1)}s`
-          : "";
-      const stunText =
-        local.stunnedMsLeft > 0
-          ? ` | Paralyse: ${(local.stunnedMsLeft / 1000).toFixed(1)}s`
-          : "";
-      const shockText =
-        local.shockCooldownMsLeft > 0
-          ? ` | Blitz-CD: ${(local.shockCooldownMsLeft / 1000).toFixed(1)}s`
-          : " | Blitz: SPACE bereit";
-      const rocketText =
-        local.rocketAmmo > 0
-          ? " | Rakete: R bereit"
-          : " | Rakete: keine";
-      const effects = [
-        this.formatEffectLabel("Speed", local.speedBoostMsLeft),
-        this.formatEffectLabel("Unverwundbar", local.invulnerableMsLeft),
-        this.formatEffectLabel("Unsichtbar", local.stealthMsLeft),
-      ].filter((entry): entry is string => Boolean(entry));
-      const effectText = effects.length > 0 ? ` | Effekte: ${effects.join(" • ")}` : "";
-      const localBountyText =
-        bountyTargetId === local.id ? ` | Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P` : "";
-      hudPlayerElement.textContent =
-        `ID ${local.id.slice(0, 6)} | Punkte: ${local.score}${protectionText}${stunText}${effectText}${shockText}${rocketText}${localBountyText}`;
+      abilityScoreElement.textContent = `${Math.max(0, Math.round(local.score))} P`;
+
+      if (local.shockCooldownMsLeft > 0) {
+        abilityShockStateElement.textContent = `${(local.shockCooldownMsLeft / 1000).toFixed(1)}s`;
+        abilityShockStateElement.className = "ability-state cooldown";
+      } else {
+        abilityShockStateElement.textContent = "Bereit";
+        abilityShockStateElement.className = "ability-state ready";
+      }
+
+      if (local.rocketAmmo > 0) {
+        abilityRocketStateElement.textContent =
+          local.rocketAmmo > 1 ? `Bereit ×${local.rocketAmmo}` : "Bereit";
+        abilityRocketStateElement.className = "ability-state ready";
+      } else {
+        abilityRocketStateElement.textContent = "Keine";
+        abilityRocketStateElement.className = "ability-state none";
+      }
+
+      const effectChips = [
+        { label: "Schutz", msLeft: local.spawnProtectionMsLeft, kind: "protect" },
+        { label: "Paralyse", msLeft: local.stunnedMsLeft, kind: "stun" },
+        { label: "Speed", msLeft: local.speedBoostMsLeft, kind: "speed" },
+        { label: "Unverwundbar", msLeft: local.invulnerableMsLeft, kind: "shield" },
+        { label: "Unsichtbar", msLeft: local.stealthMsLeft, kind: "stealth" },
+      ].filter((chip) => chip.msLeft > 0);
+      abilityEffectsElement.replaceChildren(
+        ...effectChips.map((chip) => {
+          const chipElement = document.createElement("span");
+          chipElement.className = `effect-chip chip-${chip.kind}`;
+          chipElement.textContent = `${chip.label} ${(chip.msLeft / 1000).toFixed(1)}s`;
+          return chipElement;
+        }),
+      );
+      abilityEffectsElement.hidden = effectChips.length === 0;
+
+      if (bountyTargetId === local.id) {
+        abilityAlertElement.textContent = `🎯 Kopfgeld auf DIR: +${Math.max(0, Math.round(bountyBonus))} P`;
+        abilityAlertElement.hidden = false;
+      } else {
+        abilityAlertElement.hidden = true;
+      }
     } else {
-      hudPlayerElement.textContent = "Warte auf Spawn…";
+      abilityScoreElement.textContent = "–";
+      abilityShockStateElement.textContent = "–";
+      abilityShockStateElement.className = "ability-state none";
+      abilityRocketStateElement.textContent = "–";
+      abilityRocketStateElement.className = "ability-state none";
+      abilityEffectsElement.hidden = true;
+      abilityAlertElement.hidden = true;
     }
 
     const rankingSource =
@@ -1867,49 +1926,59 @@ class GameScene extends Phaser.Scene {
         ? this.snapshot.leaderboard
         : [...(this.snapshot?.players ?? [])].sort((a, b) => b.score - a.score);
 
-    const nameWidth = this.hudCompact ? 10 : 12;
+    const localId = local?.id ?? this.localPlayerId;
     const rankingRows = rankingSource
       .slice(0, this.leaderboardLines)
-      .map((player, index) => {
-        const rankToken = String(index + 1).padStart(2, " ");
-        const nameToken = player.name.slice(0, nameWidth).padEnd(nameWidth, " ");
-        const scoreToken = String(Math.max(0, Math.round(player.score))).padStart(5, " ");
-        return `${rankToken} ${nameToken} ${scoreToken}`;
-      });
+      .map((player, index) => this.buildScoreRow(player.name, player.score, index, player.id === localId));
+
+    // Eigene Zeile immer anzeigen, auch wenn man nicht in den Top-Plaetzen ist.
+    const localIndex = rankingSource.findIndex((player) => player.id === localId);
+    if (localIndex >= this.leaderboardLines) {
+      const localEntry = rankingSource[localIndex];
+      rankingRows.push(this.buildScoreRow(localEntry.name, localEntry.score, localIndex, true));
+    } else if (localIndex === -1 && local) {
+      // Nicht im (gekappten) Server-Leaderboard: Rang unbekannt.
+      rankingRows.push(this.buildScoreRow(local.name || playerName, local.score, -1, true));
+    }
 
     if (rankingRows.length === 0) {
-      hudScoreboardElement.textContent = "   Noch keine Punkte";
+      const empty = document.createElement("div");
+      empty.className = "score-empty";
+      empty.textContent = "Noch keine Punkte";
+      hudScoreboardElement.replaceChildren(empty);
       return;
     }
 
-    const header = `RK ${"NAME".padEnd(nameWidth, " ")} PUNKTE`;
-    const separator = "-".repeat(header.length);
-    hudScoreboardElement.textContent = [header, separator, ...rankingRows].join("\n");
+    hudScoreboardElement.replaceChildren(...rankingRows);
   }
 
   private updateStatus(): void {
-    const qualityText = `Qualitaet: ${this.qualityMode.toUpperCase()} (F8)`;
+    abilityQualityElement.textContent = `Qualität: ${this.qualityMode.toUpperCase()} (F8)`;
+
+    const segments: string[] = [];
+    if (!socket.connected) {
+      segments.push("Warte auf Verbindung…");
+    }
+
     const activeEvent = this.snapshot?.activeEvent;
-    const eventText =
-      activeEvent && activeEvent.kind !== "none"
-        ? ` | Event: ${activeEvent.title} (${Math.max(0, Math.ceil(activeEvent.msLeft / 1000))}s)`
-        : "";
+    if (activeEvent && activeEvent.kind !== "none") {
+      segments.push(`⚡ ${activeEvent.title} (${Math.max(0, Math.ceil(activeEvent.msLeft / 1000))}s)`);
+    }
+
     const bountyTargetId = this.snapshot?.bountyTargetId;
     const bountyBonus = Math.max(0, Math.round(this.snapshot?.bountyBonus ?? 0));
     const specialBountyActive = Boolean(this.snapshot?.specialBountyActive);
     const bountyTarget = bountyTargetId
       ? this.snapshot?.players.find((player) => player.id === bountyTargetId)
       : undefined;
-    const bountyText = bountyTarget
-      ? ` | Kopfgeld${specialBountyActive ? " [SPEZIAL]" : ""}: ${bountyTarget.name.slice(0, 10)} (+${bountyBonus}P)`
-      : "";
-
-    if (socket.connected) {
-      hudStatusElement.textContent =
-        `Online als ${playerName || "Spieler"} | ${qualityText}${eventText}${bountyText}`;
-    } else {
-      hudStatusElement.textContent = `Warte auf Lobby-Start… | ${qualityText}`;
+    if (bountyTarget) {
+      segments.push(
+        `🎯 Kopfgeld${specialBountyActive ? " [SPEZIAL]" : ""}: ${bountyTarget.name.slice(0, 12)} (+${bountyBonus} P)`,
+      );
     }
+
+    abilityEventElement.textContent = segments.join("  ·  ");
+    abilityEventElement.hidden = segments.length === 0;
   }
 
   shutdown(): void {
