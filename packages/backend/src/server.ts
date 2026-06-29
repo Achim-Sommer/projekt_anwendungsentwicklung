@@ -45,6 +45,7 @@ const SPAWN_SAFE_PLAYER_DISTANCE = 250;
 const SPAWN_SAFE_HAZARD_DISTANCE = 120;
 const SPAWN_ATTEMPTS = 40;
 const TARGET_BOT_COUNT = 25;
+const BOT_ONLY_RESET_THRESHOLD_MS = 10 * 60 * 1000; // 10 Minuten ohne echten Spieler → Reset
 
 const ORB_SPAWN_INTERVAL_MS = 420;
 const ORB_SPAWN_INTERVAL_MS_FAST = 180;
@@ -307,6 +308,7 @@ let bountyBonusPoints = BOUNTY_BONUS_POINTS_BASE;
 let bountyVolatility = 0;
 let lastBountyBonusRefreshAt = Date.now();
 let bountyNextRotateAt = Date.now() + 8_000;
+let lastRealPlayerAt = 0;
 let specialBountyActive = false;
 let specialBountyNextEligibleAt = Date.now() + SPECIAL_BOUNTY_INITIAL_DELAY_MS;
 let currentEvent: ActiveMatchEventState = {
@@ -2230,6 +2232,19 @@ io.on("connection", (socket) => {
 
   console.log(`[Server] Player connected:    id=${socket.id}, name=${requestedName}`);
 
+  const noRealPlayersActive = Array.from(players.values()).every((p) => p.isBot);
+  if (
+    noRealPlayersActive &&
+    lastRealPlayerAt > 0 &&
+    Date.now() - lastRealPlayerAt > BOT_ONLY_RESET_THRESHOLD_MS
+  ) {
+    console.log("[Server] Lange kein echter Spieler — resette alle Bots.");
+    for (const bot of Array.from(players.values()).filter((p) => p.isBot)) {
+      players.delete(bot.id);
+      io.emit("playerLeft", { id: bot.id });
+    }
+  }
+
   const player = createPlayer(socket.id, requestedName, false);
   players.set(player.id, player);
   streamStates.set(socket.id, createStreamState());
@@ -2297,6 +2312,11 @@ io.on("connection", (socket) => {
     players.delete(player.id);
     streamStates.delete(socket.id);
     io.emit("playerLeft", { id: player.id });
+    const remainingRealPlayers = Array.from(players.values()).filter((p) => !p.isBot).length;
+    if (remainingRealPlayers === 0) {
+      lastRealPlayerAt = Date.now();
+      console.log("[Server] Letzter echter Spieler hat das Spiel verlassen.");
+    }
     maintainBots();
   });
 });
