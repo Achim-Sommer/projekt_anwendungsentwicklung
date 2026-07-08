@@ -52,8 +52,8 @@ export const SPAWN_ATTEMPTS = 40;
 
 // ── Bots ────────────────────────────────────────────────────────────────────
 
-// Anzahl Bots, die der Server dauerhaft in der Arena hält
-export const TARGET_BOT_COUNT = 25;
+// Anzahl Bots, die der Server dauerhaft in der Arena hält, werden ausgetauscht nach und nach mit echten Spielern
+export const TARGET_BOT_COUNT = 10;
 // Nach so langer Zeit ohne echten Spieler werden Bots + Score-Drops beim nächsten Join zurückgesetzt
 export const BOT_ONLY_RESET_THRESHOLD_MS = 10 * 60 * 1000; // 10 Minuten
 // Namenspool für Bots — Vergabe zufällig und ohne Doppelungen als "Bot <Name>"
@@ -109,11 +109,10 @@ export const SPECIAL_PICKUP_CHANCE = 0.07;
 // Radius von Special-Pickups
 export const SPECIAL_PICKUP_RADIUS = 9;
 // Wahrscheinlichkeit, dass ein Orb-Spawn ein Raketen-Pickup ist
-export const ROCKET_PICKUP_CHANCE = 0.09;
+export const ROCKET_PICKUP_CHANCE = 0.04;
 // Radius von Raketen-Pickups
 export const ROCKET_PICKUP_RADIUS = 10;
-// Zusätzlicher Trefferradius bei Raketentreffern (macht Treffer etwas gnädiger)
-export const ROCKET_HIT_PADDING = 10;
+// Zusätzlicher Trefferradius bei Raketentreffern - Fürs leichtere Treffen von Spielern
 // Wahrscheinlichkeit, dass ein Orb-Spawn ein Chain-Pickup ist
 export const CHAIN_PICKUP_CHANCE = 0.07;
 // Radius von Chain-Pickups
