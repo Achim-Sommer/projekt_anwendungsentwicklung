@@ -113,6 +113,7 @@ export const ROCKET_PICKUP_CHANCE = 0.04;
 // Radius von Raketen-Pickups
 export const ROCKET_PICKUP_RADIUS = 10;
 // Zusätzlicher Trefferradius bei Raketentreffern - Fürs leichtere Treffen von Spielern
+export const ROCKET_HIT_PADDING = 10;
 // Wahrscheinlichkeit, dass ein Orb-Spawn ein Chain-Pickup ist
 export const CHAIN_PICKUP_CHANCE = 0.07;
 // Radius von Chain-Pickups
