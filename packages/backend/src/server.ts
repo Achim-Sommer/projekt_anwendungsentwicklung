@@ -295,6 +295,28 @@ let lastSnapshotAt = 0;
 let lastLeaderboardAt = 0;
 let leaderboardCache: LeaderboardEntry[] = [];
 let botCounter = 1;
+
+const BOT_NAMES = [
+  "Alex", "Karla", "Finn", "Mia", "Jonas", "Lena", "Paul", "Emma",
+  "Ben", "Sofia", "Luca", "Marie", "Noah", "Clara", "Elias", "Lina",
+  "Felix", "Nora", "Max", "Ida", "Leon", "Greta", "Tom", "Zoe",
+  "Erik", "Maja", "Henry", "Luisa", "Oskar", "Frieda", "Anton", "Ella",
+  "Theo", "Romy", "Emil", "Tilda", "Jakob", "Selma", "Milan", "Juna",
+];
+
+function nextBotName(): string {
+  const usedNames = new Set(
+    Array.from(players.values())
+      .filter((p) => p.isBot)
+      .map((p) => p.name),
+  );
+  const available = BOT_NAMES.filter((name) => !usedNames.has(`Bot ${name}`));
+  if (available.length > 0) {
+    return `Bot ${available[Math.floor(Math.random() * available.length)]}`;
+  }
+  // Liste erschöpft (mehr Bots als Namen) — Zahl als Fallback
+  return `Bot ${botCounter}`;
+}
 let orbCounter = 1;
 let lastOrbSpawnAt = 0;
 let lastTickDurationMs = 0;
@@ -2073,7 +2095,7 @@ function maintainBots(): void {
   if (bots.length < targetBots) {
     for (let i = bots.length; i < targetBots; i += 1) {
       const id = `bot-${botCounter++}`;
-      players.set(id, createPlayer(id, `BOT ${botCounter - 1}`, true));
+      players.set(id, createPlayer(id, nextBotName(), true));
     }
   } else if (bots.length > targetBots) {
     const removable = bots.slice(0, bots.length - targetBots);
