@@ -1195,6 +1195,15 @@ function dropScoreOrbsFromRocketKill(victim: ServerPlayer, totalPoints: number):
   dropScoreOrbsAroundPoint(victim.x, victim.y, totalPoints, shellRadius);
 }
 
+function clearScoreDropOrbs(): void {
+  for (const orb of Array.from(pickups.values())) {
+    if (orb.kind === "score") {
+      orbGridRemove(orb);
+      pickups.delete(orb.id);
+    }
+  }
+}
+
 function canShockTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
   if (source.id === target.id || !source.alive || !target.alive) {
     return false;
@@ -2238,11 +2247,12 @@ io.on("connection", (socket) => {
     lastRealPlayerAt > 0 &&
     Date.now() - lastRealPlayerAt > BOT_ONLY_RESET_THRESHOLD_MS
   ) {
-    console.log("[Server] Lange kein echter Spieler — resette alle Bots.");
+    console.log("[Server] Lange kein echter Spieler — resette alle Bots und Score-Drops.");
     for (const bot of Array.from(players.values()).filter((p) => p.isBot)) {
       players.delete(bot.id);
       io.emit("playerLeft", { id: bot.id });
     }
+    clearScoreDropOrbs();
   }
 
   const player = createPlayer(socket.id, requestedName, false);
