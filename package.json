@@ -8,9 +8,13 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=packages/backend\" \"npm run dev --workspace=packages/frontend\"",
     "build": "npm run build --workspace=packages/shared && npm run build --workspace=packages/backend && npm run build --workspace=packages/frontend",
-    "start": "npm run start --workspace=packages/backend"
+    "start": "npm run start --workspace=packages/backend",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "vitest": "^4.1.10"
   }
 }
