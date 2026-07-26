@@ -12,13 +12,10 @@ import type {
   GameSnapshot,
   LeaderboardEntry,
   MatchEventKind,
-  PickupKind,
-  PlayerInputPayload,
   PlayerSnapshot,
   RocketShotPayload,
   SnapshotDebugInfo,
   ServerToClientEvents,
-  SkinId,
 } from "@projekt/shared";
 
 import {
@@ -32,10 +29,7 @@ import {
   FIXED_STEP_MS,
   SIM_LOOP_INTERVAL_MS,
   MAX_SIM_STEPS_PER_FRAME,
-  STREAM_FULL_RESYNC_MS,
   PLAYER_START_MASS,
-  PLAYER_ACCELERATION_BASE,
-  PLAYER_MAX_SPEED_BASE,
   PLAYER_DRAG,
   SPEED_BOOST_MULTIPLIER,
   SPEED_BOOST_TOP_SPEED_MULTIPLIER,
@@ -46,26 +40,17 @@ import {
   SPAWN_ATTEMPTS,
   TARGET_BOT_COUNT,
   BOT_ONLY_RESET_THRESHOLD_MS,
-  BOT_NAMES,
   ORB_SPAWN_INTERVAL_MS_FAST,
   ORB_BASE_COUNT,
   ORB_PER_ACTIVE_PLAYER,
   ORB_MIN_COUNT,
   ORB_MAX_COUNT,
   ORB_RADIUS,
-  ORB_VALUE_MIN,
-  ORB_VALUE_MAX,
   SCORE_DROP_ORB_RADIUS,
-  SCORE_DROP_ORB_MIN,
-  SCORE_DROP_ORB_MAX,
   SCORE_DROP_SPREAD_RADIUS,
-  SPECIAL_PICKUP_CHANCE,
   SPECIAL_PICKUP_RADIUS,
-  ROCKET_PICKUP_CHANCE,
   ROCKET_PICKUP_RADIUS,
   ROCKET_HIT_PADDING,
-  CHAIN_PICKUP_CHANCE,
-  CHAIN_PICKUP_RADIUS,
   SPECIAL_SPEED_DURATION_MS,
   SPECIAL_SHIELD_DURATION_MS,
   SPECIAL_STEALTH_DURATION_MS,
@@ -78,28 +63,20 @@ import {
   BOT_SHOCK_COOLDOWN_MULTIPLIER,
   SHOCK_SCORE_BONUS,
   KILL_MASS_BONUS,
-  CONSUME_MIN_RATIO,
   CONSUME_MASS_GAIN,
   PASSIVE_MASS_GAIN_PER_SEC,
-  HAZARD_DEATH_OVERLAP_RATIO,
-  HAZARD_DEATH_OVERLAP_MIN,
-  HAZARD_DEATH_OVERLAP_MAX,
   BOUNTY_ROTATE_INTERVAL_MS,
   BOUNTY_MIN_PLAYERS,
   BOUNTY_BONUS_POINTS_BASE,
-  BOUNTY_BONUS_POINTS_MIN,
-  BOUNTY_BONUS_POINTS_MAX,
   BOUNTY_BONUS_REFRESH_MS,
   BOUNTY_BONUS_MASS,
   SPECIAL_BOUNTY_CHANCE,
-  SPECIAL_BOUNTY_SCORE_RATIO,
   SPECIAL_BOUNTY_MIN_INTERVAL_MS,
   SPECIAL_BOUNTY_INITIAL_DELAY_MS,
   MATCH_EVENT_INTERVAL_MS,
   MATCH_EVENT_DURATION_MS,
   EVENT_HASTE_SPEED_MULTIPLIER,
   EVENT_DOUBLE_ORB_MULTIPLIER,
-  EVENT_BOUNTY_RUSH_MULTIPLIER,
   AI_SEPARATION_RADIUS,
   AI_SEPARATION_RADIUS_SQ,
   AI_DANGER_SCAN_RADIUS,
@@ -112,6 +89,47 @@ import {
   DEFAULT_PLAYER_COLOR,
   BOT_PLAYER_COLOR,
 } from "./config";
+
+// Reine Spiellogik liegt in ./game — dort ohne Server-, Socket- oder
+// Timer-Abhaengigkeiten und damit direkt per Unit-Test pruefbar.
+import {
+  clampBountyReward,
+  computeSpecialBountyReward,
+  computeStandardBountyReward,
+} from "./game/bounty";
+import {
+  canChainTarget,
+  canConsumeTarget,
+  canShockTarget,
+  findProjectileHit,
+  hasSpeedBoost,
+  hasStealth,
+  isProtectedFromKnockOut,
+  isWithinConsumeRange,
+  isWithinShockEdgeRange,
+} from "./game/combat";
+import {
+  distanceToNearestHazard,
+  edgeRepulsion,
+  findDeadlyHazard,
+  hazardCenter,
+  hazardRepulsion,
+  isPointInHazard,
+  nearestHazardCenter,
+  rayDistanceToArenaEdge,
+} from "./game/hazards";
+import { buildLeaderboardEntries, filterLeaderboardForClient } from "./game/leaderboard";
+import { accelerationForMass, clamp, massToRadius, maxSpeedForMass, normalize } from "./game/math";
+import { MIN_PLAYER_NAME_LENGTH, pickBotName, sanitizePlayerName } from "./game/names";
+import { OrbGrid } from "./game/orbGrid";
+import {
+  radiusForPickupKind,
+  rollOrbValue,
+  rollPickupKind,
+  splitScoreIntoOrbValues,
+} from "./game/pickups";
+import { createStreamState, diffSnapshot, type StreamState } from "./game/snapshot";
+import type { ServerPlayer } from "./game/types";
 
 const FRONTEND_DIST_PATH = path.resolve(__dirname, "../../frontend/dist");
 const FRONTEND_INDEX_PATH = path.join(FRONTEND_DIST_PATH, "index.html");
@@ -128,54 +146,6 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   ".ico": "image/x-icon",
   ".webp": "image/webp",
 };
-
-interface ServerPlayer {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  radius: number;
-  color: number;
-  skinId: SkinId;
-  mass: number;
-  score: number;
-  isBot: boolean;
-  alive: boolean;
-  respawnAt: number;
-  connectedAt: number;
-  spawnedAt: number;
-  spawnProtectedUntil: number;
-  speedBoostUntil: number;
-  invulnerableUntil: number;
-  stealthUntil: number;
-  stunnedUntil: number;
-  shockCooldownUntil: number;
-  rocketAmmo: number;
-  chainAmmo: number;
-  shockInputHeld: boolean;
-  rocketInputHeld: boolean;
-  chainInputHeld: boolean;
-  lastInput: PlayerInputPayload;
-  lastThreatBy?: string;
-  aiTargetId?: string;
-  aiTargetKind?: "player" | "orb";
-  aiDecisionAt: number;
-  aiTickPhase: number;
-  aiAggression: number;
-  aiGreed: number;
-  aiCaution: number;
-  aiRetreatUntil: number;
-}
-
-interface StreamState {
-  initialized: boolean;
-  lastFullAt: number;
-  playerSignatures: Map<string, string>;
-  pickupSignatures: Map<string, string>;
-  lastMetaSignature: string;
-}
 
 interface ActiveMatchEventState {
   kind: MatchEventKind;
@@ -266,23 +236,14 @@ const arena: ArenaState = {
 
 // --- Spatial grid for orb lookups ---
 const GRID_CELL = 100;
-const GRID_COLS = Math.ceil(arena.width / GRID_CELL);
-const GRID_ROWS = Math.ceil(arena.height / GRID_CELL);
-const orbGrid: Set<string>[] = [];
-for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) orbGrid.push(new Set());
-
-function orbGridIndex(x: number, y: number): number {
-  const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(x / GRID_CELL)));
-  const row = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(y / GRID_CELL)));
-  return row * GRID_COLS + col;
-}
+const orbGrid = new OrbGrid(arena.width, arena.height, GRID_CELL);
 
 function orbGridInsert(orb: ForceOrb): void {
-  orbGrid[orbGridIndex(orb.x, orb.y)].add(orb.id);
+  orbGrid.insert(orb.id, orb.x, orb.y);
 }
 
 function orbGridRemove(orb: ForceOrb): void {
-  orbGrid[orbGridIndex(orb.x, orb.y)].delete(orb.id);
+  orbGrid.remove(orb.id, orb.x, orb.y);
 }
 
 const players = new Map<string, ServerPlayer>();
@@ -301,12 +262,7 @@ function nextBotName(): string {
       .filter((p) => p.isBot)
       .map((p) => p.name),
   );
-  const available = BOT_NAMES.filter((name) => !usedNames.has(`Bot ${name}`));
-  if (available.length > 0) {
-    return `Bot ${available[Math.floor(Math.random() * available.length)]}`;
-  }
-  // Liste erschöpft (mehr Bots als Namen) — Zahl als Fallback
-  return `Bot ${botCounter}`;
+  return pickBotName(usedNames, botCounter);
 }
 let orbCounter = 1;
 let lastOrbSpawnAt = 0;
@@ -332,52 +288,11 @@ let currentEvent: ActiveMatchEventState = {
 };
 let nextEventAt = Date.now() + 28_000;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function normalize(x: number, y: number): { x: number; y: number; length: number } {
-  const length = Math.hypot(x, y);
-  if (length < 0.0001) {
-    return { x: 0, y: 0, length: 0 };
-  }
-  return { x: x / length, y: y / length, length };
-}
-
-function massToRadius(mass: number): number {
-  return 10 + 2.35 * Math.sqrt(Math.max(1, mass));
-}
-
-function maxSpeedForMass(mass: number): number {
-  const speed = PLAYER_MAX_SPEED_BASE * Math.pow(Math.max(1, mass), -0.25);
-  return clamp(speed, 145, PLAYER_MAX_SPEED_BASE);
-}
-
-function accelerationForMass(mass: number): number {
-  const acceleration = PLAYER_ACCELERATION_BASE * Math.pow(Math.max(1, mass), -0.2);
-  return clamp(acceleration, 430, PLAYER_ACCELERATION_BASE);
-}
-
 function randomSpawn() {
   return {
     x: 180 + Math.random() * (arena.width - 360),
     y: 140 + Math.random() * (arena.height - 280),
   };
-}
-
-function distanceToNearestHazard(x: number, y: number): number {
-  let best = Number.POSITIVE_INFINITY;
-  for (const hazard of arena.hazards) {
-    const nearestX = clamp(x, hazard.x, hazard.x + hazard.width);
-    const nearestY = clamp(y, hazard.y, hazard.y + hazard.height);
-    const dx = x - nearestX;
-    const dy = y - nearestY;
-    const dist = Math.hypot(dx, dy);
-    if (dist < best) {
-      best = dist;
-    }
-  }
-  return best;
 }
 
 function distanceToNearestAlivePlayer(x: number, y: number, excludeId?: string): number {
@@ -400,12 +315,12 @@ function findSafeSpawn(excludeId?: string): { x: number; y: number } {
 
   for (let i = 0; i < SPAWN_ATTEMPTS; i += 1) {
     const candidate = randomSpawn();
-    if (isPointInHazard(candidate.x, candidate.y)) {
+    if (isPointInHazard(arena.hazards, candidate.x, candidate.y)) {
       continue;
     }
 
     const playerDistance = distanceToNearestAlivePlayer(candidate.x, candidate.y, excludeId);
-    const hazardDistance = distanceToNearestHazard(candidate.x, candidate.y);
+    const hazardDistance = distanceToNearestHazard(arena.hazards, candidate.x, candidate.y);
 
     if (
       playerDistance >= SPAWN_SAFE_PLAYER_DISTANCE &&
@@ -426,32 +341,6 @@ function findSafeSpawn(excludeId?: string): { x: number; y: number } {
 
 function baseColorForPlayer(player: ServerPlayer): number {
   return player.isBot ? BOT_PLAYER_COLOR : DEFAULT_PLAYER_COLOR;
-}
-
-function hasSpeedBoost(player: ServerPlayer, now: number): boolean {
-  return player.speedBoostUntil > now;
-}
-
-function hasInvulnerability(player: ServerPlayer, now: number): boolean {
-  return player.invulnerableUntil > now;
-}
-
-function hasStealth(player: ServerPlayer, now: number): boolean {
-  return player.stealthUntil > now;
-}
-
-function isProtectedFromKnockOut(player: ServerPlayer, now: number): boolean {
-  return player.spawnProtectedUntil > now || hasInvulnerability(player, now);
-}
-
-function createStreamState(): StreamState {
-  return {
-    initialized: false,
-    lastFullAt: 0,
-    playerSignatures: new Map<string, string>(),
-    pickupSignatures: new Map<string, string>(),
-    lastMetaSignature: "",
-  };
 }
 
 function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
@@ -478,18 +367,6 @@ function toPlayerSnapshot(player: ServerPlayer, now: number): PlayerSnapshot {
     isBot: player.isBot,
     alive: player.alive,
   };
-}
-
-function buildLeaderboardEntries(): LeaderboardEntry[] {
-  return Array.from(players.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10)
-    .map((player) => ({
-      id: player.id,
-      name: player.name,
-      score: player.score,
-      isBot: player.isBot,
-    }));
 }
 
 function adaptiveOrbCap(): number {
@@ -551,11 +428,7 @@ function currentEventSpeedMultiplier(): number {
 }
 
 function currentBountyRewardPoints(): number {
-  const rounded = Math.max(0, Math.round(bountyBonusPoints));
-  if (specialBountyActive) {
-    return rounded;
-  }
-  return clamp(rounded, BOUNTY_BONUS_POINTS_MIN, BOUNTY_BONUS_POINTS_MAX);
+  return clampBountyReward(bountyBonusPoints, specialBountyActive);
 }
 
 function largestAlivePlayerByMass(): ServerPlayer | null {
@@ -572,11 +445,7 @@ function largestAlivePlayerByMass(): ServerPlayer | null {
 }
 
 function specialBountyRewardPointsFromLargestPlayer(): number {
-  const largest = largestAlivePlayerByMass();
-  if (!largest) {
-    return 0;
-  }
-  return Math.max(0, Math.round(largest.score * SPECIAL_BOUNTY_SCORE_RATIO));
+  return computeSpecialBountyReward(largestAlivePlayerByMass()?.score ?? null);
 }
 
 function activeAlivePlayerCount(): number {
@@ -594,21 +463,13 @@ function computeDynamicBountyRewardPoints(target: ServerPlayer | null): number {
     return specialBountyRewardPointsFromLargestPlayer();
   }
 
-  const alivePlayers = activeAlivePlayerCount();
-  const playerFactor = Math.max(0, alivePlayers - BOUNTY_MIN_PLAYERS) * 3;
-
-  const targetMass = Math.max(8, target?.mass ?? PLAYER_START_MASS);
-  const massFactor = Math.round(Math.sqrt(targetMass) * 3.1);
-
-  const targetScore = Math.max(0, target?.score ?? 0);
-  const scoreFactor = Math.round(Math.log10(targetScore + 10) * 8.2);
-
-  let reward = BOUNTY_BONUS_POINTS_BASE + playerFactor + massFactor + scoreFactor + bountyVolatility;
-  if (currentEvent.kind === "bounty_rush") {
-    reward *= EVENT_BOUNTY_RUSH_MULTIPLIER;
-  }
-
-  return clamp(Math.round(reward), BOUNTY_BONUS_POINTS_MIN, BOUNTY_BONUS_POINTS_MAX);
+  return computeStandardBountyReward({
+    alivePlayerCount: activeAlivePlayerCount(),
+    targetMass: target?.mass ?? null,
+    targetScore: target?.score ?? null,
+    volatility: bountyVolatility,
+    bountyRushActive: currentEvent.kind === "bounty_rush",
+  });
 }
 
 function refreshBountyRewardPoints(target: ServerPlayer | null, now: number): void {
@@ -765,37 +626,6 @@ function updateBountyState(now: number): void {
   rotateRandomBounty(now, false);
 }
 
-function playerSignature(player: PlayerSnapshot): string {
-  const protectionBucket = Math.ceil(player.spawnProtectionMsLeft / 120);
-  const speedBucket = Math.ceil(player.speedBoostMsLeft / 180);
-  const invulnerabilityBucket = Math.ceil(player.invulnerableMsLeft / 180);
-  const stealthBucket = Math.ceil(player.stealthMsLeft / 180);
-  const stunBucket = Math.ceil(player.stunnedMsLeft / 120);
-  const shockCooldownBucket = Math.ceil(player.shockCooldownMsLeft / 250);
-  const rocketAmmoBucket = clamp(Math.round(player.rocketAmmo), 0, 9);
-  return [
-    Math.round(player.x * 10),
-    Math.round(player.y * 10),
-    Math.round(player.vx * 10),
-    Math.round(player.vy * 10),
-    Math.round(player.radius * 10),
-    player.score,
-    player.alive ? 1 : 0,
-    player.skinId,
-    protectionBucket,
-    speedBucket,
-    invulnerabilityBucket,
-    stealthBucket,
-    stunBucket,
-    shockCooldownBucket,
-    rocketAmmoBucket,
-  ].join("|");
-}
-
-function pickupSignature(pickup: ForceOrb): string {
-  return [pickup.id, pickup.kind, Math.round(pickup.x), Math.round(pickup.y), pickup.value, pickup.radius].join("|");
-}
-
 function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): PlayerSnapshot[] {
   const result: PlayerSnapshot[] = [];
 
@@ -812,23 +642,6 @@ function visiblePlayersForClient(localPlayer: ServerPlayer, now: number): Player
   }
 
   return result;
-}
-
-function filterLeaderboardForClient(
-  localPlayer: ServerPlayer,
-  leaderboard: LeaderboardEntry[],
-  now: number,
-): LeaderboardEntry[] {
-  return leaderboard.filter((entry) => {
-    if (entry.id === localPlayer.id) {
-      return true;
-    }
-    const candidate = players.get(entry.id);
-    if (!candidate) {
-      return false;
-    }
-    return !hasStealth(candidate, now);
-  });
 }
 
 function visiblePickupsForClient(localPlayer: ServerPlayer): ForceOrb[] {
@@ -855,82 +668,19 @@ function buildClientSnapshot(
     Math.ceil(activeEvent.msLeft / 1000),
   ].join("|");
 
-  const shouldFull =
-    forceFull ||
-    !streamState.initialized ||
-    now - streamState.lastFullAt >= STREAM_FULL_RESYNC_MS;
-
-  const nextPlayerSignatures = new Map<string, string>();
-  for (const player of visiblePlayers) {
-    nextPlayerSignatures.set(player.id, playerSignature(player));
-  }
-
-  const nextPickupSignatures = new Map<string, string>();
-  for (const pickup of visiblePickups) {
-    nextPickupSignatures.set(pickup.id, pickupSignature(pickup));
-  }
-
-  if (shouldFull) {
-    streamState.initialized = true;
-    streamState.lastFullAt = now;
-    streamState.playerSignatures = nextPlayerSignatures;
-    streamState.pickupSignatures = nextPickupSignatures;
-    streamState.lastMetaSignature = metaSignature;
-    return {
-      tick,
-      serverTime: now,
-      full: true,
-      players: visiblePlayers,
-      pickups: visiblePickups,
-      removedPlayerIds: [],
-      removedPickupIds: [],
-      leaderboard,
-      bountyTargetId,
-      bountyBonus: currentBountyRewardPoints(),
-      specialBountyActive,
-      activeEvent,
-      debug,
-    };
-  }
-
-  const changedPlayers = visiblePlayers.filter((player) => {
-    const signature = nextPlayerSignatures.get(player.id);
-    return signature !== streamState.playerSignatures.get(player.id);
-  });
-  const changedPickups = visiblePickups.filter((pickup) => {
-    const signature = nextPickupSignatures.get(pickup.id);
-    return signature !== streamState.pickupSignatures.get(pickup.id);
-  });
-  const removedPlayerIds = Array.from(streamState.playerSignatures.keys()).filter(
-    (id) => !nextPlayerSignatures.has(id),
-  );
-  const removedPickupIds = Array.from(streamState.pickupSignatures.keys()).filter(
-    (id) => !nextPickupSignatures.has(id),
-  );
-  const metaChanged = metaSignature !== streamState.lastMetaSignature;
-
-  streamState.playerSignatures = nextPlayerSignatures;
-  streamState.pickupSignatures = nextPickupSignatures;
-  streamState.lastMetaSignature = metaSignature;
-
-  if (
-    changedPlayers.length === 0 &&
-    changedPickups.length === 0 &&
-    removedPlayerIds.length === 0 &&
-    removedPickupIds.length === 0 &&
-    !metaChanged
-  ) {
+  const diff = diffSnapshot(streamState, visiblePlayers, visiblePickups, metaSignature, now, forceFull);
+  if (!diff) {
     return null;
   }
 
   return {
     tick,
     serverTime: now,
-    full: false,
-    players: changedPlayers,
-    pickups: changedPickups,
-    removedPlayerIds,
-    removedPickupIds,
+    full: diff.full,
+    players: diff.players,
+    pickups: diff.pickups,
+    removedPlayerIds: diff.removedPlayerIds,
+    removedPickupIds: diff.removedPickupIds,
     leaderboard,
     bountyTargetId,
     bountyBonus: currentBountyRewardPoints(),
@@ -954,24 +704,12 @@ function emitSnapshots(now: number, leaderboard: LeaderboardEntry[], debug: Snap
       streamStates.set(socketId, streamState);
     }
 
-    const filteredLeaderboard = filterLeaderboardForClient(localPlayer, leaderboard, now);
+    const filteredLeaderboard = filterLeaderboardForClient(localPlayer.id, leaderboard, players, now);
     const snapshot = buildClientSnapshot(localPlayer, now, filteredLeaderboard, debug, streamState);
     if (snapshot) {
       socket.emit("snapshot", snapshot);
     }
   }
-}
-
-function sanitizePlayerName(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-
-  return value
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/[^\p{L}\p{N}_\- .]/gu, "")
-    .slice(0, 16);
 }
 
 function createPlayer(id: string, name: string, isBot: boolean): ServerPlayer {
@@ -1061,7 +799,7 @@ function buildSnapshot(): GameSnapshot {
     serverTime: now,
     players: playerSnapshots,
     pickups: Array.from(pickups.values()),
-    leaderboard: buildLeaderboardEntries(),
+    leaderboard: buildLeaderboardEntries(players.values()),
     bountyTargetId,
     bountyBonus: currentBountyRewardPoints(),
     specialBountyActive,
@@ -1074,70 +812,6 @@ function applyMass(player: ServerPlayer, amount: number): void {
   player.radius = massToRadius(player.mass);
 }
 
-function findDeadlyHazard(player: ServerPlayer): ArenaState["hazards"][number] | undefined {
-  const radiusSq = player.radius * player.radius;
-  for (const hazard of arena.hazards) {
-    const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
-    const nearestY = clamp(player.y, hazard.y, hazard.y + hazard.height);
-    const dx = player.x - nearestX;
-    const dy = player.y - nearestY;
-    const distSq = dx * dx + dy * dy;
-
-    if (distSq >= radiusSq) {
-      continue;
-    }
-
-    const distance = Math.sqrt(distSq);
-    const overlapDepth = player.radius - distance;
-    const requiredDepth = clamp(
-      player.radius * HAZARD_DEATH_OVERLAP_RATIO,
-      HAZARD_DEATH_OVERLAP_MIN,
-      HAZARD_DEATH_OVERLAP_MAX,
-    );
-
-    if (overlapDepth >= requiredDepth) {
-      return hazard;
-    }
-  }
-
-  return undefined;
-}
-
-function isPointInHazard(x: number, y: number): boolean {
-  return arena.hazards.some((hazard) => {
-    return x >= hazard.x && x <= hazard.x + hazard.width && y >= hazard.y && y <= hazard.y + hazard.height;
-  });
-}
-
-function hazardCenter(hazard: ArenaState["hazards"][number]): { x: number; y: number } {
-  return {
-    x: hazard.x + hazard.width / 2,
-    y: hazard.y + hazard.height / 2,
-  };
-}
-
-function nearestHazardCenter(target: ServerPlayer): { x: number; y: number } {
-  if (arena.hazards.length === 0) {
-    return { x: target.x, y: target.y };
-  }
-
-  let best = hazardCenter(arena.hazards[0]);
-  let bestDistSq = Number.POSITIVE_INFINITY;
-
-  for (const hazard of arena.hazards) {
-    const center = hazardCenter(hazard);
-    const dx = center.x - target.x;
-    const dy = center.y - target.y;
-    const distSq = dx * dx + dy * dy;
-    if (distSq < bestDistSq) {
-      best = center;
-      bestDistSq = distSq;
-    }
-  }
-
-  return best;
-}
-
 function dropScoreOrbsAroundPoint(
   centerX: number,
   centerY: number,
@@ -1148,33 +822,14 @@ function dropScoreOrbsAroundPoint(
     return;
   }
 
-  const orbCount = clamp(Math.ceil(Math.sqrt(totalPoints) * 1.15), SCORE_DROP_ORB_MIN, SCORE_DROP_ORB_MAX);
-  let remaining = Math.max(1, Math.round(totalPoints));
-
-  for (let i = 0; i < orbCount; i += 1) {
-    const slotsLeft = orbCount - i;
-    let value = remaining;
-    if (slotsLeft > 1) {
-      const average = remaining / slotsLeft;
-      const spread = Math.max(1, Math.round(average * 0.35));
-      const minAllowed = 1;
-      const maxAllowed = remaining - (slotsLeft - 1);
-      value = clamp(
-        Math.round(average + (Math.random() * 2 - 1) * spread),
-        minAllowed,
-        maxAllowed,
-      );
-    }
-
-    remaining -= value;
-
+  for (const value of splitScoreIntoOrbValues(totalPoints)) {
     const angle = Math.random() * Math.PI * 2;
     let distance = shellRadius + Math.random() * SCORE_DROP_SPREAD_RADIUS;
     let x = centerX + Math.cos(angle) * distance;
     let y = centerY + Math.sin(angle) * distance;
     let guard = 0;
 
-    while (isPointInHazard(x, y) && guard < 6) {
+    while (isPointInHazard(arena.hazards, x, y) && guard < 6) {
       distance += 22;
       x = centerX + Math.cos(angle) * distance;
       y = centerY + Math.sin(angle) * distance;
@@ -1215,27 +870,6 @@ function clearScoreDropOrbs(): void {
       pickups.delete(orb.id);
     }
   }
-}
-
-function canShockTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
-  if (source.id === target.id || !source.alive || !target.alive) {
-    return false;
-  }
-  if (target.spawnProtectedUntil > now || hasInvulnerability(target, now) || hasStealth(target, now)) {
-    return false;
-  }
-  return true;
-}
-
-function canChainTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
-  return canShockTarget(source, target, now);
-}
-
-function isWithinShockEdgeRange(source: ServerPlayer, target: ServerPlayer): boolean {
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
-  const centerRange = SHOCK_EDGE_RANGE + source.radius + target.radius;
-  return dx * dx + dy * dy <= centerRange * centerRange;
 }
 
 function tryShockNearestTarget(source: ServerPlayer, now: number): void {
@@ -1308,73 +942,34 @@ function rocketAimDirection(source: ServerPlayer): { x: number; y: number } {
   return { x: 1, y: 0 };
 }
 
-function rayDistanceToArenaEdge(originX: number, originY: number, dirX: number, dirY: number): number {
-  let best = Number.POSITIVE_INFINITY;
-
-  if (Math.abs(dirX) > 0.000001) {
-    const tx = dirX > 0 ? (arena.width - originX) / dirX : (0 - originX) / dirX;
-    if (tx >= 0) {
-      best = Math.min(best, tx);
-    }
-  }
-
-  if (Math.abs(dirY) > 0.000001) {
-    const ty = dirY > 0 ? (arena.height - originY) / dirY : (0 - originY) / dirY;
-    if (ty >= 0) {
-      best = Math.min(best, ty);
-    }
-  }
-
-  if (!Number.isFinite(best) || best < 0) {
-    return 0;
-  }
-
-  return best;
-}
-
 function tryFireRocketAtNearestTarget(source: ServerPlayer, now: number): void {
   if (!source.alive || source.rocketAmmo <= 0 || source.stunnedUntil > now) {
     return;
   }
 
   const direction = rocketAimDirection(source);
-  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+  const maxDistance = rayDistanceToArenaEdge(
+    arena.width,
+    arena.height,
+    source.x,
+    source.y,
+    direction.x,
+    direction.y,
+  );
 
-  let bestTarget: ServerPlayer | undefined;
-  let bestHitDistance = Number.POSITIVE_INFINITY;
-
-  for (const candidate of players.values()) {
-    if (!canRocketTarget(source, candidate)) {
-      continue;
-    }
-
-    const relX = candidate.x - source.x;
-    const relY = candidate.y - source.y;
-    const projectedDistance = relX * direction.x + relY * direction.y;
-    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
-      continue;
-    }
-
-    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
-    const hitRadius = candidate.radius + ROCKET_HIT_PADDING;
-    const hitRadiusSq = hitRadius * hitRadius;
-    if (perpendicularDistanceSq > hitRadiusSq) {
-      continue;
-    }
-
-    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
-    const hitDistance = projectedDistance - entryOffset;
-    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
-      continue;
-    }
-
-    bestTarget = candidate;
-    bestHitDistance = hitDistance;
-  }
+  const hit = findProjectileHit(
+    source,
+    players.values(),
+    direction,
+    maxDistance,
+    ROCKET_HIT_PADDING,
+    (candidate) => canRocketTarget(source, candidate),
+  );
+  const bestTarget = hit?.target;
 
   source.rocketAmmo = Math.max(0, source.rocketAmmo - 1);
 
-  const shotDistance = bestTarget ? Math.max(0, bestHitDistance) : Math.max(0, maxDistance);
+  const shotDistance = hit ? Math.max(0, hit.distance) : Math.max(0, maxDistance);
   const rocketShotPayload: RocketShotPayload = {
     shooterId: source.id,
     fromX: source.x,
@@ -1401,43 +996,28 @@ function tryFireChainAtNearestTarget(source: ServerPlayer, now: number): void {
   }
 
   const direction = rocketAimDirection(source);
-  const maxDistance = rayDistanceToArenaEdge(source.x, source.y, direction.x, direction.y);
+  const maxDistance = rayDistanceToArenaEdge(
+    arena.width,
+    arena.height,
+    source.x,
+    source.y,
+    direction.x,
+    direction.y,
+  );
 
-  let bestTarget: ServerPlayer | undefined;
-  let bestHitDistance = Number.POSITIVE_INFINITY;
-
-  for (const candidate of players.values()) {
-    if (!canChainTarget(source, candidate, now)) {
-      continue;
-    }
-
-    const relX = candidate.x - source.x;
-    const relY = candidate.y - source.y;
-    const projectedDistance = relX * direction.x + relY * direction.y;
-    if (projectedDistance <= 0 || projectedDistance > maxDistance) {
-      continue;
-    }
-
-    const perpendicularDistanceSq = relX * relX + relY * relY - projectedDistance * projectedDistance;
-    const hitRadius = candidate.radius + CHAIN_EDGE_RANGE * 0.02;
-    const hitRadiusSq = hitRadius * hitRadius;
-    if (perpendicularDistanceSq > hitRadiusSq) {
-      continue;
-    }
-
-    const entryOffset = Math.sqrt(Math.max(0, hitRadiusSq - perpendicularDistanceSq));
-    const hitDistance = projectedDistance - entryOffset;
-    if (hitDistance < 0 || hitDistance > maxDistance || hitDistance >= bestHitDistance) {
-      continue;
-    }
-
-    bestTarget = candidate;
-    bestHitDistance = hitDistance;
-  }
+  const hit = findProjectileHit(
+    source,
+    players.values(),
+    direction,
+    maxDistance,
+    CHAIN_EDGE_RANGE * 0.02,
+    (candidate) => canChainTarget(source, candidate, now),
+  );
+  const bestTarget = hit?.target;
 
   source.chainAmmo = Math.max(0, source.chainAmmo - 1);
 
-  const shotDistance = bestTarget ? Math.max(0, bestHitDistance) : Math.max(0, maxDistance);
+  const shotDistance = hit ? Math.max(0, hit.distance) : Math.max(0, maxDistance);
   const chainShotPayload: ChainShotPayload = {
     shooterId: source.id,
     fromX: source.x,
@@ -1459,59 +1039,6 @@ function tryFireChainAtNearestTarget(source: ServerPlayer, now: number): void {
   bestTarget.lastThreatBy = source.id;
   source.score += CHAIN_SCORE_BONUS;
   combatBoostUntil = Math.max(combatBoostUntil, now + 1600);
-}
-
-function edgeRepulsion(player: ServerPlayer): { x: number; y: number } {
-  const margin = 180;
-  const left = clamp((margin - player.x) / margin, 0, 1);
-  const right = clamp((player.x - (arena.width - margin)) / margin, 0, 1);
-  const top = clamp((margin - player.y) / margin, 0, 1);
-  const bottom = clamp((player.y - (arena.height - margin)) / margin, 0, 1);
-
-  return {
-    x: left - right,
-    y: top - bottom,
-  };
-}
-
-function hazardRepulsion(player: ServerPlayer): { x: number; y: number } {
-  let sumX = 0;
-  let sumY = 0;
-  const avoidRange = 140;
-  const avoidRangeSq = avoidRange * avoidRange;
-
-  for (const hazard of arena.hazards) {
-    const nearestX = clamp(player.x, hazard.x, hazard.x + hazard.width);
-    const nearestY = clamp(player.y, hazard.y, hazard.y + hazard.height);
-    const dx = player.x - nearestX;
-    const dy = player.y - nearestY;
-    const distSq = dx * dx + dy * dy;
-
-    if (distSq >= avoidRangeSq || distSq < 0.00000001) {
-      continue;
-    }
-
-    const distance = Math.sqrt(distSq);
-    const push = 1 - distance / avoidRange;
-    const weight = push * push;
-    sumX += (dx / distance) * weight;
-    sumY += (dy / distance) * weight;
-  }
-
-  return { x: sumX, y: sumY };
-}
-
-function canConsumeTarget(source: ServerPlayer, target: ServerPlayer, now: number): boolean {
-  if (source.id === target.id || !source.alive || !target.alive) {
-    return false;
-  }
-  if (source.spawnProtectedUntil > now || target.spawnProtectedUntil > now) {
-    return false;
-  }
-  if (hasInvulnerability(target, now) || hasStealth(target, now)) {
-    return false;
-  }
-  return source.mass >= target.mass * CONSUME_MIN_RATIO;
 }
 
 function knockOut(
@@ -1600,10 +1127,7 @@ function resolveConsumptions(playersList: ServerPlayer[], now: number): void {
         continue;
       }
 
-      const dx = eater.x - victim.x;
-      const dy = eater.y - victim.y;
-      const consumeRadius = Math.max(8, eater.radius - victim.radius * 0.32);
-      if (dx * dx + dy * dy > consumeRadius * consumeRadius) {
+      if (!isWithinConsumeRange(eater, victim)) {
         continue;
       }
 
@@ -1653,41 +1177,21 @@ function spawnOrb(now: number): void {
 
   let spawn = randomSpawn();
   let safety = 0;
-  while (isPointInHazard(spawn.x, spawn.y) && safety < 20) {
+  while (isPointInHazard(arena.hazards, spawn.x, spawn.y) && safety < 20) {
     spawn = randomSpawn();
     safety += 1;
   }
 
   const id = `orb-${orbCounter++}`;
-  const specialRoll = Math.random();
-  let kind: PickupKind = "mass";
-  if (specialRoll < ROCKET_PICKUP_CHANCE) {
-    kind = "rocket";
-  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE) {
-    kind = "chain";
-  } else if (specialRoll < ROCKET_PICKUP_CHANCE + CHAIN_PICKUP_CHANCE + SPECIAL_PICKUP_CHANCE) {
-    const specials: PickupKind[] = ["speed", "shield", "stealth"];
-    kind = specials[Math.floor(Math.random() * specials.length)] ?? "speed";
-  }
-
-  const value = kind === "mass"
-    ? ORB_VALUE_MIN + Math.floor(Math.random() * (ORB_VALUE_MAX - ORB_VALUE_MIN + 1))
-    : 0;
+  const kind = rollPickupKind(Math.random(), Math.random());
 
   const orb: ForceOrb = {
     id,
     kind,
     x: spawn.x,
     y: spawn.y,
-    radius:
-      kind === "mass"
-        ? ORB_RADIUS
-        : kind === "rocket"
-          ? ROCKET_PICKUP_RADIUS
-          : kind === "chain"
-            ? CHAIN_PICKUP_RADIUS
-          : SPECIAL_PICKUP_RADIUS,
-    value,
+    radius: radiusForPickupKind(kind),
+    value: rollOrbValue(kind),
   };
   pickups.set(id, orb);
   orbGridInsert(orb);
@@ -1699,54 +1203,45 @@ function collectOrbs(playersList: ServerPlayer[], now: number): void {
 
   for (const player of playersList) {
     const maxPickupDist = player.radius + Math.max(ORB_RADIUS, SPECIAL_PICKUP_RADIUS, ROCKET_PICKUP_RADIUS);
-    const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(player.x / GRID_CELL)));
-    const row = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(player.y / GRID_CELL)));
-    const range = Math.ceil(maxPickupDist / GRID_CELL) + 1;
-    for (let dr = -range; dr <= range; dr++) {
-      const r = row + dr;
-      if (r < 0 || r >= GRID_ROWS) continue;
-      for (let dc = -range; dc <= range; dc++) {
-        const c = col + dc;
-        if (c < 0 || c >= GRID_COLS) continue;
-        const cell = orbGrid[r * GRID_COLS + c];
-        for (const orbId of cell) {
-          const orb = pickups.get(orbId);
-          if (!orb) { cell.delete(orbId); continue; }
-          const dx = player.x - orb.x;
-          const dy = player.y - orb.y;
-          const pickupDist = player.radius + orb.radius;
-          if (dx * dx + dy * dy > pickupDist * pickupDist) continue;
 
-          if (orb.kind === "mass") {
-            const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
-            applyMass(player, orb.value * catchUpBonus * orbMultiplier);
-            player.score += Math.max(1, Math.round(orb.value * 1.4 * orbMultiplier));
-          } else if (orb.kind === "score") {
-            player.score += Math.max(1, Math.round(orb.value));
-            applyMass(player, Math.max(0.8, orb.value * 0.12));
-          } else if (orb.kind === "speed") {
-            player.speedBoostUntil = Math.max(player.speedBoostUntil, now + SPECIAL_SPEED_DURATION_MS);
-            player.score += 3;
-          } else if (orb.kind === "shield") {
-            player.invulnerableUntil = Math.max(
-              player.invulnerableUntil,
-              now + SPECIAL_SHIELD_DURATION_MS,
-            );
-            player.score += 3;
-          } else if (orb.kind === "stealth") {
-            player.stealthUntil = Math.max(player.stealthUntil, now + SPECIAL_STEALTH_DURATION_MS);
-            player.score += 3;
-          } else if (orb.kind === "rocket") {
-            player.rocketAmmo = Math.min(1, player.rocketAmmo + 1);
-            player.score += 6;
-          } else if (orb.kind === "chain") {
-            player.chainAmmo = Math.min(1, player.chainAmmo + 1);
-            player.score += 5;
-          }
+    for (const cell of orbGrid.cellsNear(player.x, player.y, maxPickupDist)) {
+      for (const orbId of cell) {
+        const orb = pickups.get(orbId);
+        if (!orb) { cell.delete(orbId); continue; }
+        const dx = player.x - orb.x;
+        const dy = player.y - orb.y;
+        const pickupDist = player.radius + orb.radius;
+        if (dx * dx + dy * dy > pickupDist * pickupDist) continue;
 
-          cell.delete(orbId);
-          pickups.delete(orbId);
+        if (orb.kind === "mass") {
+          const catchUpBonus = player.mass < 26 ? 1.3 : player.mass < 34 ? 1.15 : 1;
+          applyMass(player, orb.value * catchUpBonus * orbMultiplier);
+          player.score += Math.max(1, Math.round(orb.value * 1.4 * orbMultiplier));
+        } else if (orb.kind === "score") {
+          player.score += Math.max(1, Math.round(orb.value));
+          applyMass(player, Math.max(0.8, orb.value * 0.12));
+        } else if (orb.kind === "speed") {
+          player.speedBoostUntil = Math.max(player.speedBoostUntil, now + SPECIAL_SPEED_DURATION_MS);
+          player.score += 3;
+        } else if (orb.kind === "shield") {
+          player.invulnerableUntil = Math.max(
+            player.invulnerableUntil,
+            now + SPECIAL_SHIELD_DURATION_MS,
+          );
+          player.score += 3;
+        } else if (orb.kind === "stealth") {
+          player.stealthUntil = Math.max(player.stealthUntil, now + SPECIAL_STEALTH_DURATION_MS);
+          player.score += 3;
+        } else if (orb.kind === "rocket") {
+          player.rocketAmmo = Math.min(1, player.rocketAmmo + 1);
+          player.score += 6;
+        } else if (orb.kind === "chain") {
+          player.chainAmmo = Math.min(1, player.chainAmmo + 1);
+          player.score += 5;
         }
+
+        cell.delete(orbId);
+        pickups.delete(orbId);
       }
     }
   }
@@ -1866,7 +1361,7 @@ function runAi(now: number): void {
           utility = retreating ? 74 : 30;
         }
 
-        const hazardDistance = distanceToNearestHazard(orb.x, orb.y);
+        const hazardDistance = distanceToNearestHazard(arena.hazards, orb.x, orb.y);
         const hazardPenalty = hazardDistance < 42 ? 0.62 : hazardDistance < 80 ? 0.82 : 1;
         const chasePenalty =
           retreating && nearestThreat
@@ -1929,7 +1424,7 @@ function runAi(now: number): void {
         const predictedX = target.x + target.vx * leadTime;
         const predictedY = target.y + target.vy * leadTime;
 
-        const hazard = nearestHazardCenter(target);
+        const hazard = nearestHazardCenter(arena.hazards, target.x, target.y);
         const hazardDir = normalize(hazard.x - target.x, hazard.y - target.y);
         const trapOffset = 86 + 48 * bot.aiAggression;
         const trapPoint = {
@@ -1952,8 +1447,8 @@ function runAi(now: number): void {
     targetY = clamp(targetY, 26, arena.height - 26);
 
     const toTarget = normalize(targetX - bot.x, targetY - bot.y);
-    const edgeAvoid = edgeRepulsion(bot);
-    const hazardAvoid = hazardRepulsion(bot);
+    const edgeAvoid = edgeRepulsion(arena.width, arena.height, bot.x, bot.y);
+    const hazardAvoid = hazardRepulsion(arena.hazards, bot.x, bot.y);
 
     let separationX = 0;
     let separationY = 0;
@@ -2138,7 +1633,7 @@ function tickSimulation(now: number, dt: number): void {
     leaderboardCache.length === 0 ||
     now - lastLeaderboardAt >= 1000 / currentLeaderboardRate
   ) {
-    leaderboardCache = buildLeaderboardEntries();
+    leaderboardCache = buildLeaderboardEntries(players.values());
     lastLeaderboardAt = now;
   }
 
@@ -2218,7 +1713,7 @@ function tickSimulation(now: number, dt: number): void {
     if (isProtectedFromKnockOut(player, now)) {
       continue;
     }
-    const hazard = findDeadlyHazard(player);
+    const hazard = findDeadlyHazard(arena.hazards, player.x, player.y, player.radius);
     if (hazard) {
       if (hazard.type === "pit") {
         knockOut(player, undefined, "pit", hazard);
@@ -2246,7 +1741,7 @@ function tickSimulation(now: number, dt: number): void {
 
 io.on("connection", (socket) => {
   const requestedName = sanitizePlayerName(socket.handshake.auth?.playerName);
-  if (requestedName.length < 2) {
+  if (requestedName.length < MIN_PLAYER_NAME_LENGTH) {
     console.log(`[Server] Connection rejected (missing name): id=${socket.id}`);
     socket.disconnect(true);
     return;
@@ -2276,7 +1771,7 @@ io.on("connection", (socket) => {
   const initialSnapshot = buildClientSnapshot(
     player,
     Date.now(),
-    buildLeaderboardEntries(),
+    buildLeaderboardEntries(players.values()),
     {
       serverTickMs: lastTickDurationMs,
       snapshotRate: currentSnapshotRate,
